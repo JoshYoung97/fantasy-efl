@@ -55,6 +55,10 @@ def _player(p, kickoffs, gw=None, extra=None):
         # for the squad, which is where the minutes controls live -- carrying
         # it for the whole pool would triple the page for nothing.
         "curve": gw.minutes_curve(p.id) if gw else [],
+        # Where the slider should start: the model's own minutes estimate,
+        # which sharpens as the season supplies appearances. Starting at 90
+        # would quietly assert every player goes the distance.
+        "xmins": round(gw.expected_minutes(p.id)) if gw else None,
     }
     if extra:
         out.update(extra)

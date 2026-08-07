@@ -237,11 +237,15 @@ GK_PRIORS = {(12, "GK"): {
 
 
 def test_first_choice_keeper_is_inferred_from_shirt_number():
-    """Number 1 keepers made a median 32 appearances against 8 for others."""
+    """Number 1 keepers made a median 32 appearances against 8 for others.
+
+    The gap should reflect that roughly 4:1 ratio rather than a rounder guess,
+    so the assertion is on the relationship, not on a hand-picked constant.
+    """
     first = estimate_minutes(keeper(shirt=1))
     backup = estimate_minutes(keeper(shirt=13))
-    assert first.p_60_plus > backup.p_60_plus
-    assert first.p_60_plus >= 0.8
+    assert first.p_60_plus > backup.p_60_plus * 3
+    assert 0.6 < first.p_60_plus < 0.8
 
 
 def test_keepers_are_not_modelled_as_substitutes():
@@ -318,3 +322,54 @@ def test_override_of_a_no_history_player_stays_bounded():
     assert project_player(unknown, make_fixture(), PRIORS, minutes_override=90) < (
         project_player(known, make_fixture(), PRIORS, minutes_override=90) * 2
     )
+
+
+def test_appearance_rate_is_measured_against_games_actually_played():
+    """The bug this guards: absolute yardsticks break once the season starts.
+
+    With a 46-game divisor, an ever-present player five gameweeks in reads as
+    11% likely to feature, which would make the model useless until spring.
+    """
+    early = estimate_minutes(make_player(appearances=5), games_played=5)
+    assert early.p_appears > 0.75
+
+
+def test_an_ever_present_player_reads_the_same_all_season():
+    """Availability should not drift much once there is real evidence."""
+    rates = [
+        estimate_minutes(make_player(appearances=n), games_played=n).p_appears
+        for n in (5, 10, 20, 40)
+    ]
+    assert all(r > 0.75 for r in rates)
+    assert rates == sorted(rates)  # confidence grows, never falls
+
+
+def test_a_rotation_player_is_distinguished_from_a_starter():
+    starter = estimate_minutes(make_player(appearances=20), games_played=20)
+    rotated = estimate_minutes(make_player(appearances=10), games_played=20)
+    assert starter.p_appears > rotated.p_appears + 0.3
+
+
+def test_one_appearance_does_not_make_a_nailed_starter():
+    """Without a prior, 1 of 1 would read as certainty."""
+    assert estimate_minutes(make_player(appearances=1), games_played=1).p_appears < 0.7
+
+
+def test_preseason_falls_back_to_a_full_season_yardstick():
+    """games_played=0 means the feed still holds last season's totals."""
+    assert estimate_minutes(make_player(appearances=46), games_played=0).p_appears > 0.9
+
+
+def test_expected_minutes_tracks_availability():
+    from fantasy_efl.player_model import expected_minutes
+    nailed = expected_minutes(make_player(appearances=20), games_played=20)
+    rotated = expected_minutes(make_player(appearances=6), games_played=20)
+    assert nailed > rotated
+    assert 0 < rotated < nailed <= 90
+
+
+def test_a_proven_keeper_outranks_an_assumed_first_choice():
+    """Evidence must beat an assumption, not the other way round."""
+    proven = estimate_minutes(keeper(appearances=46, shirt=13), games_played=0)
+    assumed = estimate_minutes(keeper(appearances=0, shirt=1))
+    assert proven.p_60_plus > assumed.p_60_plus

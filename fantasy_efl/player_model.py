@@ -55,10 +55,25 @@ ATTACKING_STATS = ("goalsScored", "assists", "keyPasses", "shotsOnTarget")
 #: season totals. Replace with measured values once deltas allow.
 CARD_COST = {"GK": 0.04, "DEF": 0.14, "MID": 0.16, "FWD": 0.10}
 
-#: Share of appearances lasting 60+ minutes, by how established the player is.
-#: Calibrated against season totals: assuming every appearance is a full match
-#: overstates points by ~0.5 each, and the gap narrows for nailed starters.
-START_SHARE = ((40, 0.86), (30, 0.74), (20, 0.66), (0, 0.55))
+#: Share of appearances lasting 60+ minutes, keyed by the fraction of
+#: available games the player has featured in.
+#:
+#: Expressed as a fraction rather than a raw count so it works at any point in
+#: the season. Absolute thresholds silently break once the feed rolls over to
+#: current-season stats: after five gameweeks an ever-present player has five
+#: appearances, which against a 46-game yardstick reads as a fringe squad
+#: member. Calibrated against full-season totals, where assuming every
+#: appearance is a full match overstates points by ~0.5 each.
+START_SHARE = ((0.85, 0.86), (0.65, 0.74), (0.43, 0.66), (0.0, 0.55))
+
+#: Weight and rate of the prior on how often a player features.
+#:
+#: Without this, one appearance in one gameweek would read as a nailed starter.
+#: Blending toward a neutral rate keeps early-season estimates sane and fades
+#: as real evidence accumulates: 1 of 1 gives 0.63, 5 of 5 gives 0.81, 20 of 20
+#: gives 0.93.
+AVAILABILITY_PRIOR_WEIGHT = 3.0
+AVAILABILITY_PRIOR_RATE = 0.5
 
 #: Typical minutes in each branch, used to convert per-appearance rates to
 #: the per-90 basis the scoring engine expects.
@@ -95,9 +110,15 @@ NO_HISTORY_APPEARANCE_PRIOR = 0.45
 #: wearing 1 made a median of 32 appearances last season against 8 for every
 #: other number. Ignoring that signal projects a first-choice keeper with no
 #: EFL record at roughly 2 points when the market-derived figure is nearer 4.7.
+#:
+#: The rates below are those medians, 32/46 and 8/46, rather than a rounder
+#: guess. An earlier 0.85 was above what the data supports, and high enough
+#: that an assumed first-choice keeper outranked one with a full season of
+#: appearances behind him -- an assumption beating evidence, which is the wrong
+#: way round.
 FIRST_CHOICE_KEEPER_SHIRT = 1
-FIRST_CHOICE_KEEPER_START_PRIOR = 0.85
-BACKUP_KEEPER_START_PRIOR = 0.20
+FIRST_CHOICE_KEEPER_START_PRIOR = 0.70
+BACKUP_KEEPER_START_PRIOR = 0.17
 
 
 def build_priors(players: list[dict]) -> dict[tuple[int, str], dict[str, float]]:
@@ -142,13 +163,16 @@ def shrunk_rate(total: float, appearances: int, prior: float) -> float:
     return (total + SHRINKAGE_WEIGHT * prior) / (appearances + SHRINKAGE_WEIGHT)
 
 
-def estimate_minutes(player: dict) -> MinutesModel:
+def estimate_minutes(player: dict, games_played: int = 0) -> MinutesModel:
     """How likely the player is to feature, and for how long.
 
     Availability comes from last season's appearance rate; the split between
     full matches and cameos from the calibrated start share. Injured and
     suspended players are zeroed -- the feed marks them explicitly. Players with
     no EFL record fall back to NO_HISTORY_APPEARANCE_PRIOR rather than zero.
+
+    `games_played` is how many fixtures the player's club has actually had this
+    season. Pass 0 pre-season, when the feed still shows last season's totals.
     """
     if player.get("status") in ("injured", "suspended", "eliminated"):
         return MinutesModel(p_60_plus=0.0, p_short=0.0)
@@ -169,13 +193,23 @@ def estimate_minutes(player: dict) -> MinutesModel:
             mean_minutes_60_plus=90.0,
         )
 
-    p_features = (
-        min(appearances / SEASON_GAMES, 1.0)
-        if appearances
-        else NO_HISTORY_APPEARANCE_PRIOR
-    )
+    # Pre-season the feed still carries last season's totals, so a full
+    # campaign is the right yardstick. Once games have been played it carries
+    # current-season stats and the yardstick has to follow, or every player
+    # looks like a benchwarmer until spring.
+    basis = games_played if games_played else SEASON_GAMES
 
-    start_share = next(share for threshold, share in START_SHARE if appearances >= threshold)
+    if appearances:
+        p_features = min(
+            (appearances + AVAILABILITY_PRIOR_WEIGHT * AVAILABILITY_PRIOR_RATE)
+            / (basis + AVAILABILITY_PRIOR_WEIGHT),
+            1.0,
+        )
+    else:
+        p_features = NO_HISTORY_APPEARANCE_PRIOR
+
+    featured_share = min(appearances / basis, 1.0) if basis else 0.0
+    start_share = next(share for threshold, share in START_SHARE if featured_share >= threshold)
 
     return MinutesModel(
         p_60_plus=p_features * start_share,
@@ -198,6 +232,17 @@ def estimate_minutes(player: dict) -> MinutesModel:
 #: player's per-match defensive actions on their fixture's expected goals
 #: against, once weekly snapshot deltas have accumulated enough gameweeks.
 ADJUSTMENT_STRENGTH = 0.5
+
+
+def expected_minutes(player: dict, games_played: int = 0) -> float:
+    """Minutes this player is expected to play, averaged over all outcomes.
+
+    Includes the chance of not featuring at all, so a rotation risk reads lower
+    than a nailed starter. Used to seed the page's minutes control, which
+    therefore sharpens as the season supplies more evidence.
+    """
+    m = estimate_minutes(player, games_played)
+    return m.p_60_plus * m.mean_minutes_60_plus + m.p_short * m.mean_minutes_short
 
 
 def _fixture_multipliers(
@@ -247,6 +292,7 @@ def project_player(
     priors: dict,
     *,
     minutes_override: float | None = None,
+    games_played: int = 0,
     league_average_goals: float = 1.3,
 ) -> float:
     """Expected Fantasy EFL points for one player in one fixture.
@@ -258,7 +304,7 @@ def project_player(
     less time to accumulate.
     """
     minutes = (
-        estimate_minutes(player)
+        estimate_minutes(player, games_played)
         if minutes_override is None
         else deterministic_minutes(minutes_override)
     )
@@ -270,7 +316,7 @@ def project_player(
     # player, not of whether he happens to be fit this week -- otherwise
     # overriding a player who has just been passed fit would use a different
     # basis from an identical team-mate who was never injured.
-    natural = estimate_minutes({**player, "status": "playing"})
+    natural = estimate_minutes({**player, "status": "playing"}, games_played)
 
     prior = _prior_for(player, priors)
     appearances = player["appearances"]

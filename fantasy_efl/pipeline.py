@@ -15,7 +15,12 @@ from .expected import ClubOutcome, expected_club_points
 from .goals import GoalProfile, match_probabilities
 from .fpl_backfill import FplError, apply_backfill, fetch_fpl_players, match_keepers
 from .oddsapi import fetch_all_efl
-from .player_model import PlayerProjection, build_priors, project_player
+from .player_model import (
+    PlayerProjection,
+    build_priors,
+    expected_minutes,
+    project_player,
+)
 from .projections import ClubProjection, project_all
 from .snapshot import list_snapshots, load_snapshot
 
@@ -47,6 +52,14 @@ class Gameweek:
     raw_by_id: dict = None
     fixtures_by_club: dict = None
     priors: dict = None
+    games_played: dict = None
+
+    def expected_minutes(self, player_id: int) -> float:
+        """The model's own view of how long a player will be on the pitch."""
+        raw = (self.raw_by_id or {}).get(player_id)
+        if raw is None:
+            return 0.0
+        return expected_minutes(raw, (self.games_played or {}).get(raw["squadId"], 0))
 
     def minutes_curve(self, player_id: int) -> list[float]:
         """Projected points across MINUTES_GRID for one player.
@@ -60,8 +73,15 @@ class Gameweek:
         fixture = (self.fixtures_by_club or {}).get(raw["squadId"])
         if fixture is None:
             return []
+        played = (self.games_played or {}).get(raw["squadId"], 0)
         return [
-            round(project_player(raw, fixture, self.priors, minutes_override=m), 2)
+            round(
+                project_player(
+                    raw, fixture, self.priors,
+                    minutes_override=m, games_played=played,
+                ),
+                2,
+            )
             for m in MINUTES_GRID
         ]
 
@@ -188,6 +208,21 @@ def load_gameweek(
             # a handful of goalkeepers, not the run.
             pass
 
+    # How many fixtures each club has completed. The feed shows last
+    # season's totals until the new one starts, then rolls over -- so the
+    # appearance yardstick has to follow, or every player reads as a fringe
+    # squad member until spring.
+    games_played: dict[int, int] = {sid: 0 for sid in squads}
+    for rnd in load_snapshot(snapshots[-1], "rounds"):
+        if rnd.get("gameMode") != "season":
+            continue
+        for game in rnd.get("games", []):
+            if game.get("homeScore") is None:
+                continue
+            for side in ("homeId", "awayId"):
+                if game[side] in games_played:
+                    games_played[game[side]] += 1
+
     club_projections = project_all(fetch_all_efl()[0])
     clubs = [c for cs in club_projections.values() for c in cs]
     # Both sides of the fixture need EFL spellings, or a club and its
@@ -225,7 +260,10 @@ def load_gameweek(
                 club=club,
                 opponent=to_efl_name.get(fixture.opponent, fixture.opponent),
                 away=fixture.away,
-                expected_points=project_player(player, fixture, priors),
+                expected_points=project_player(
+                    player, fixture, priors,
+                    games_played=games_played.get(player["squadId"], 0),
+                ),
                 fixtures=1,
                 selected_pct=player.get("percentSelected", 0.0),
                 status=player["status"],
@@ -246,4 +284,5 @@ def load_gameweek(
             if fixtures.get(mapping.get(name, ""))
         },
         priors=priors,
+        games_played=games_played,
     )

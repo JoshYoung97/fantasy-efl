@@ -707,11 +707,16 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
     slider.min = "0";
     slider.max = String(GRID.length - 1);
     slider.step = "1";
-    // Start at 90, the usual answer once a player is confirmed to start.
-    slider.value = String(GRID.length - 1);
+    // Start at the model's own estimate rather than 90. Early in the season
+    // that is well short of a full match, and it sharpens as appearances
+    // accumulate -- so the control opens at something defensible instead of
+    // asserting everyone plays the whole game.
+    const seed = Number.isFinite(p.xmins) ? p.xmins : GRID.length - 1;
+    slider.value = String(Math.max(0, Math.min(GRID.length - 1, seed)));
     slider.setAttribute("aria-label", "Expected minutes for " + p.name);
 
-    const readout = el("div", "mins-val", "auto");
+    const readout = el("div", "mins-val",
+      Number.isFinite(p.xmins) ? "~" + p.xmins + " mins" : "auto");
     const reset = el("button", "reset", "AUTO");
     reset.type = "button";
     reset.setAttribute("aria-label", "Use the model's estimate for " + p.name);
@@ -719,7 +724,7 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
     function apply(idx) {
       if (idx === undefined) {
         overrides.delete(p.name);
-        readout.textContent = "auto";
+        readout.textContent = Number.isFinite(p.xmins) ? "~" + p.xmins + " mins" : "auto";
         readout.classList.remove("set");
         reset.classList.remove("on");
         row.classList.remove("adjusted");
