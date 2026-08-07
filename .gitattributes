@@ -1,0 +1,10 @@
+# Normalise line endings so Windows and Unix collaborators do not produce
+# whole-file diffs every time they touch a script.
+* text=auto eol=lf
+
+# These are executed by Windows and need CRLF to run reliably.
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Snapshots are gzipped; never let git try to normalise them.
+*.gz binary

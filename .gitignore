@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Generated on every refresh -- rebuilt by scripts/export_app_data.py and
+# scripts/build_app.py, so committing them means a conflict twice a day.
+data/app_data.json
+data/app.html
+
+# Machine-local
+data/*.log
+
+# Credentials never belong here. Everything is read from environment
+# variables (ODDS_API_KEY, BETFAIR_*); see README. If you find yourself
+# wanting to add a secrets file to this list, put it outside the repo instead.
+.env
+*.key

@@ -1,1 +1,203 @@
-# fantasy-efl
+# Fantasy EFL projections
+
+Expected-points projections for the official [Fantasy EFL](https://fantasy.efl.com)
+game: 7 players and 2 clubs per gameweek across all three EFL divisions.
+
+Betting markets supply the fixture context, last season's Fantasy EFL stats
+supply the player rates, and an exact solver picks the best legal squad.
+
+Standard library only. No dependencies beyond `pytest` to run the tests.
+
+---
+
+## Why this game is not FPL
+
+The rules differ in ways that change the whole approach:
+
+- **No budget, no player prices, unlimited transfers.** There is no value or
+  efficiency dimension at all. Projection accuracy *is* the entire product.
+- **Interceptions score +2 each for midfielders, uncapped.** More than a goal
+  (+6) for a player making three. This single rule makes ball-winning
+  midfielders the dominant position, and it holds up empirically: the best
+  midfielder projects around 3 points clear of the best player in any other
+  position.
+- **Rolling lockout.** Players lock at their own kickoff, not at one deadline.
+  In GW1 that is 19 hours of extra time for most of the squad — long enough
+  that confirmed line-ups are usually still actionable.
+- **Doubles are routine, not rare.** 20 of 42 gameweeks contain a double, and
+  they arrive in whole-division blocks (24, 48 or 72 clubs), never a handful.
+- **Two clubs per gameweek, each usable 5 times per season.** A season-long
+  allocation problem with no FPL equivalent. Currently unsolved.
+
+---
+
+## Setup
+
+```bash
+# 1. A free Odds API key: https://the-odds-api.com  (email only, no card)
+powershell -ExecutionPolicy Bypass -File scripts/setup_credentials.ps1
+
+# 2. First snapshot of the EFL feeds
+python -m fantasy_efl.snapshot
+
+# 3. Map EFL club names to bookmaker names (needs the key)
+python scripts/build_club_mapping.py
+
+# 4. The best legal squad
+python scripts/optimal_team.py
+```
+
+Credentials are read from environment variables only — never from files, never
+from arguments. `setup_credentials.ps1` prompts locally so they stay out of
+shell history. On Mac or Linux, export `ODDS_API_KEY` however you normally
+would.
+
+**Budget:** each run costs 3 Odds API credits against a 500/month free tier.
+Refreshing daily uses about 90.
+
+---
+
+## Commands
+
+| Command | Does |
+|---|---|
+| `python -m fantasy_efl.snapshot` | Capture the EFL feeds |
+| `python scripts/optimal_team.py` | Best legal squad |
+| `python scripts/player_projections.py` | Ranked players by position |
+| `python scripts/export_app_data.py` | Data for the web page |
+| `python scripts/build_app.py` | Build `data/app.html` |
+| `python -m pytest tests/ -q` | 164 tests |
+
+`optimal_team.py` takes:
+
+- `--exclude Wing Clarke` — drop players after team news
+- `--odds Swindon=1.4/0.5` — override a fixture's expected goals for/against
+- `--one-club` — model the One Club chip
+- `--proven-only` — exclude players with no EFL record
+
+---
+
+## How a projection is built
+
+**Clubs** come straight from the market:
+
+1. De-vig the exchange or bookmaker prices (raw prices sum to ~105%, so they
+   are not probabilities until corrected — Shin's method by default).
+2. Solve for both teams' Poisson scoring rates. 1X2 gives exactly two
+   constraints for two parameters, so the rates are identified without
+   spending credits on a totals market.
+3. `5·P(win) + 3·P(draw) + 2·P(win ∧ away) + 2·P(CS) + 2·P(2+) + 2·P(4+)`
+
+**Players** multiply three inputs — a rate, a fixture adjustment, and minutes —
+then apply the scoring rules conditional on the minutes branch.
+
+### The thing to understand before changing anything
+
+Most scoring rules are **floor functions**: every 3 saves, every 4 clearances,
+every 2 tackles. `E[floor(X/k)] ≠ E[X]/k`, because a player has to actually
+reach each threshold.
+
+Using `E[floor(X/k)] = Σ P(X ≥ jk)` over a negative binomial, a defender
+averaging 0.72 tackles earns **0.18** points from the "every 2 tackles" rule,
+not 0.36. The error is worst on low-rate stats, which is most stats for most
+players.
+
+Validated against a real 242-point season: the distributional method lands at
+1.3% error, the naive one at 11.2%. If you change `expected.py`, keep this
+property — `tests/test_scoring.py` will tell you if you haven't.
+
+---
+
+## Known gaps — read this before trusting a number
+
+**`ADJUSTMENT_STRENGTH` (player_model.py) is the biggest open risk.** It sets
+how hard fixture context moves a player's rates. At 1.0 defenders prefer hard
+fixtures (defensive volume wins); at 0.5 they prefer easy ones (the undamped
+clean sheet term wins). *The sign flips on a parameter nobody has measured*,
+and it changes four of the seven optimal picks. Defaulted to 0.5 as the honest
+midpoint. `tests/test_player_model.py` pins both behaviours so this cannot
+drift silently.
+
+Midfielders are unaffected in direction — they earn no clean sheet points, so
+pressure is unopposed.
+
+**About a third of all ownership sits on players the model cannot rate.** 571
+selectable players have no EFL record, including the three most-owned players
+in the game — ex-Premier League players at relegated clubs. They are projected
+from position priors and rank low, so they are visible but never selected.
+Resolves itself a few gameweeks into the season.
+
+**The minutes model is calibrated, not measured.** The feed reports
+appearances, not minutes, and counts a five-minute cameo the same as a full
+match — worth about 0.5 points per appearance. Recoverable from snapshot
+deltas once real gameweeks have been played.
+
+**Cards are assumed**, not fed. Position-level allowances in `CARD_COST`.
+
+**No multi-gameweek horizon.** Odds run three days ahead. The obvious
+substitute — last season's club points — does not predict current market
+expectations (r = +0.12 overall, −0.16 in League One), so forward projections
+are deliberately absent rather than fabricated.
+
+---
+
+## Snapshots are time-critical
+
+The EFL feeds carry **season totals only**, no per-match rows. Differencing
+consecutive snapshots is the only route to match-level data, which is what
+will eventually fix the minutes model, the card gap and the unrateable
+players.
+
+A week not captured is gone. Totals stay correct — you lose the ability to
+attribute stats to a specific match, which matters most in double gameweeks.
+
+Two Windows scheduled tasks handle this (`FantasyEFL-Snapshot` twice daily,
+`FantasyEFL-Refresh` daily). On other platforms, cron the same scripts.
+
+**Snapshots are committed to this repo.** They are the project's least
+replaceable asset. Commit them periodically rather than after every run, and
+prefer one machine collecting rather than several producing divergent
+histories.
+
+---
+
+## Layout
+
+```
+fantasy_efl/
+  scoring.py       exact rules; doubles as the backtest oracle
+  expected.py      projections, with correct floor-function expectations
+  goals.py         solve Poisson rates from 1X2 prices
+  odds.py          de-vigging: proportional, power, Shin, exchange midpoint
+  oddsapi.py       The Odds API client
+  betfair.py       read-only exchange client (unused; see its docstring)
+  fpl_backfill.py  FPL goalkeeper backfill (does not work; see its docstring)
+  club_names.py    EFL ↔ bookmaker club name matching
+  player_model.py  rates, shrinkage, minutes, fixture adjustment
+  projections.py   market prices → club projections
+  optimiser.py     exact constrained squad selection
+  pipeline.py      the whole chain, assembled once
+  snapshot.py      feed capture and differencing
+scripts/           runnable entry points
+tests/             164 tests
+data/              snapshots, club mapping, generated page
+```
+
+Two modules are dead ends kept deliberately, with the reasons in their
+docstrings — `fpl_backfill.py` (the FPL API drops relegated clubs, so it
+recovers nobody) and `betfair.py` (exchange prices arrive through the Odds API
+already). Read those before rebuilding either.
+
+---
+
+## Contributing
+
+Run the tests. They encode the scoring rules, and several exist specifically
+to stop a plausible-looking change from silently breaking the maths:
+
+```bash
+python -m pytest tests/ -q
+```
+
+If you change a projection, say what it does to the GW1 squad — the numbers in
+this README came from real market prices and are worth keeping honest.
