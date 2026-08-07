@@ -49,10 +49,12 @@ def make_gameweek():
         PlayerProjection(1, "P1", "DEF", "Alpha", "Beta", False, 5.0, 1, 0.0, "playing"),
         PlayerProjection(2, "P2", "DEF", "Beta", "Alpha", True, 4.0, 1, 0.0, "playing"),
     ]
+    # Fixture stores hold a list per club, because a club can play twice.
     return Gameweek(
         players=players, clubs=[home, away], backfilled=0, unproven=0, ambiguous=[],
         raw_by_id={1: raw(1, 10), 2: raw(2, 20)},
-        fixtures_by_club={10: home, 20: away},
+        fixtures_by_club={10: [home], 20: [away]},
+        per_fixture={"Alpha": [home], "Beta": [away]},
         priors=PRIORS,
     )
 
@@ -165,3 +167,16 @@ def test_played_fixtures_are_read_from_data_not_a_status_string():
     assert _is_played({"homeScore": None, "isFinalized": True})
     assert not _is_played({"homeScore": None, "isFinalized": False})
     assert not _is_played({"status": "scheduled"})
+
+
+def test_overriding_a_double_gameweek_is_refused():
+    """Which of the two fixtures the numbers refer to is genuinely ambiguous.
+
+    Guessing would silently reprice the wrong match, so this errors instead.
+    """
+    from dataclasses import replace
+
+    gw = make_gameweek()
+    gw.clubs[0] = replace(gw.clubs[0], fixture_count=2, scheduled_count=2)
+    with pytest.raises(ValueError, match="plays 2 times"):
+        override_fixture(gw, "Alpha", 1.5, 1.0)

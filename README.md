@@ -26,6 +26,9 @@ The rules differ in ways that change the whole approach:
   that confirmed line-ups are usually still actionable.
 - **Doubles are routine, not rare.** 20 of 42 gameweeks contain a double, and
   they arrive in whole-division blocks (24, 48 or 72 clubs), never a handful.
+  A club playing twice scores from both, so projections sum across fixtures.
+  Where the market has priced only one of them — odds run three days ahead —
+  the shortfall is reported rather than passed off as a whole gameweek.
 - **Two clubs per gameweek, each usable 5 times per season.** A season-long
   allocation problem with no FPL equivalent. Currently unsolved.
 
@@ -66,7 +69,7 @@ Refreshing daily uses about 90.
 | `python scripts/player_projections.py` | Ranked players by position |
 | `python scripts/export_app_data.py` | Data for the web page |
 | `python scripts/build_app.py` | Build `data/app.html` |
-| `python -m pytest tests/ -q` | 164 tests |
+| `python -m pytest tests/ -q` | 182 tests |
 
 `optimal_team.py` takes:
 
@@ -109,25 +112,6 @@ property — `tests/test_scoring.py` will tell you if you haven't.
 ---
 
 ## Known gaps — read this before trusting a number
-
-**Double gameweeks are silently dropped. This is the largest open bug.** The
-pipeline maps clubs to fixtures with `{p.club: p for p in clubs}`, and a dict
-keeps only the last value — so when a club plays twice, one fixture vanishes
-and its players are projected as if they played once. `PlayerProjection.fixtures`
-is hardcoded to 1 for the same reason.
-
-It does not bite until **GW3, when 70 of 72 clubs play twice**, and it affects
-20 of 42 gameweeks. Fixing it means mapping each club to a *list* of fixtures
-and summing across them; the optimiser needs no change, because the captain
-doubling a summed total is equivalent to doubling each fixture.
-
-One wrinkle to handle when fixing it: odds run only three days ahead, so the
-second fixture of a double may not be priced when the first is. The fix should
-sum whatever the market has priced and report how many of the scheduled
-fixtures that covers, rather than quietly projecting a partial gameweek as if
-it were complete.
-
-
 
 **`ADJUSTMENT_STRENGTH` (player_model.py) is the biggest open risk.** It sets
 how hard fixture context moves a player's rates. At 1.0 defenders prefer hard
@@ -198,7 +182,7 @@ fantasy_efl/
   pipeline.py      the whole chain, assembled once
   snapshot.py      feed capture and differencing
 scripts/           runnable entry points
-tests/             164 tests
+tests/             182 tests
 data/              snapshots, club mapping, generated page
 ```
 

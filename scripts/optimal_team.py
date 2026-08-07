@@ -130,6 +130,18 @@ def main() -> int:
     print("  ".join(note))
     if gw.ambiguous:
         print(f"  {len(gw.ambiguous)} keeper names too ambiguous to match, skipped")
+
+    doubles = [c for c in gw.clubs if c.is_double]
+    if doubles:
+        print(f"  {len(doubles)} clubs play twice this gameweek")
+    partial = [c for c in gw.clubs if c.missing_fixtures]
+    if partial:
+        # Odds run three days ahead, so a double's second game is often
+        # unpriced. Saying so beats presenting a half gameweek as a whole one.
+        print(f"  {len(partial)} of those only partly priced -- projections "
+              f"cover the priced fixtures only:")
+        for c in sorted(partial, key=lambda c: -c.expected_points)[:6]:
+            print(f"      {c.club} ({c.fixture_count} of {c.scheduled_count})")
     print()
 
     # Odds overrides first: they change player projections, so they must land

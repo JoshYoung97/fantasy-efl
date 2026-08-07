@@ -153,7 +153,8 @@ def main() -> int:
             "clubs": [
                 {"name": c.club, "opp": c.opponent, "away": c.away,
                  "xp": round(c.expected_points, 2),
-                 "kickoff": kickoffs.get(c.club)}
+                 "kickoff": kickoffs.get(c.club),
+                 "fx": c.fixture_count, "sched": c.scheduled_count}
                 for c in squad.clubs
             ],
             "total": round(squad.expected_points, 2),
@@ -169,6 +170,8 @@ def main() -> int:
                 "cs": round(c.profile.p_clean_sheet, 3),
                 "outlook": fixture_counts.get(squad_ids.get(c.club, -1), []),
                 "kickoff": kickoffs.get(c.club),
+                "fx": c.fixture_count,
+                "sched": c.scheduled_count,
             }
             for c in sorted(gw.clubs, key=lambda c: -c.expected_points)
         ],

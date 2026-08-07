@@ -53,6 +53,7 @@ class Gameweek:
     fixtures_by_club: dict = None
     priors: dict = None
     games_played: dict = None
+    per_fixture: dict = None
 
     def expected_minutes(self, player_id: int) -> float:
         """The model's own view of how long a player will be on the pitch."""
@@ -70,20 +71,48 @@ class Gameweek:
         raw = (self.raw_by_id or {}).get(player_id)
         if raw is None:
             return []
-        fixture = (self.fixtures_by_club or {}).get(raw["squadId"])
-        if fixture is None:
+        club_fixtures = (self.fixtures_by_club or {}).get(raw["squadId"]) or []
+        if not club_fixtures:
             return []
         played = (self.games_played or {}).get(raw["squadId"], 0)
         return [
             round(
-                project_player(
-                    raw, fixture, self.priors,
-                    minutes_override=m, games_played=played,
+                sum(
+                    project_player(
+                        raw, f, self.priors,
+                        minutes_override=m, games_played=played,
+                    )
+                    for f in club_fixtures
                 ),
                 2,
             )
             for m in MINUTES_GRID
         ]
+
+
+def _round_complete(rnd: dict) -> bool:
+    """Whether every fixture in a round has been played."""
+    games = rnd.get("games") or []
+    return bool(games) and all(_is_played(g) for g in games)
+
+
+def _combine(name: str, group: list[ClubProjection], scheduled: int) -> ClubProjection:
+    """Fold a club's fixtures into one entry for the gameweek.
+
+    Points sum, because a club playing twice scores from both. The remaining
+    fields come from the first fixture and are indicative only for a double --
+    `fixture_count` is what tells you to read them that way.
+    """
+    first = group[0]
+    if len(group) == 1 and scheduled <= 1:
+        return replace(first, fixture_count=1, scheduled_count=max(1, scheduled))
+    return replace(
+        first,
+        opponent=" + ".join(f.opponent for f in group),
+        expected_points=sum(f.expected_points for f in group),
+        fixture_count=len(group),
+        scheduled_count=max(scheduled, len(group)),
+    )
 
 
 def _is_played(game: dict) -> bool:
@@ -117,6 +146,13 @@ def override_fixture(
     target = next((c for c in gw.clubs if c.club == club_name), None)
     if target is None:
         raise KeyError(club_name)
+    if target.fixture_count > 1:
+        # Which of the two fixtures the numbers refer to is genuinely
+        # ambiguous, and guessing would silently reprice the wrong match.
+        raise ValueError(
+            f"{club_name} plays {target.fixture_count} times this gameweek; "
+            f"overriding a single fixture is not supported"
+        )
     opponent = next(
         (c for c in gw.clubs if c.club == target.opponent and c.opponent == club_name),
         None,
@@ -153,10 +189,12 @@ def override_fixture(
             source="manual",
         )
         gw.clubs[gw.clubs.index(side)] = updated
-        if gw.fixtures_by_club:
-            for sid, fixture in gw.fixtures_by_club.items():
-                if fixture is side:
-                    gw.fixtures_by_club[sid] = updated
+        # Fixture lists are keyed by squad id and by club name; both hold the
+        # same objects, so both need the replacement.
+        for store in (gw.fixtures_by_club, gw.per_fixture):
+            for key, group in (store or {}).items():
+                if group and any(f is side for f in group):
+                    store[key] = [updated if f is side else f for f in group]
         rebuilt.append(updated)
 
     # Re-project every player whose fixture just changed.
@@ -168,11 +206,14 @@ def override_fixture(
         fixture = next(c for c in rebuilt if c.club == projection.club)
         if raw is None:
             continue
+        played = (gw.games_played or {}).get(raw["squadId"], 0)
         gw.players[index] = replace(
             projection,
             opponent=fixture.opponent,
             away=fixture.away,
-            expected_points=project_player(raw, fixture, gw.priors),
+            expected_points=project_player(
+                raw, fixture, gw.priors, games_played=played
+            ),
         )
 
     return rebuilt
@@ -247,7 +288,36 @@ def load_gameweek(
         object.__setattr__(club, "club", to_efl_name.get(club.club, club.club))
         object.__setattr__(club, "opponent", to_efl_name.get(club.opponent, club.opponent))
 
-    fixtures = {p.club: p for p in clubs}
+    # How many fixtures each club is scheduled for this gameweek. A club
+    # playing twice scores from both, so the projection has to cover both --
+    # and where the market has priced only one, that shortfall is reported
+    # rather than passed off as a complete gameweek.
+    upcoming = min(
+        (r for r in load_snapshot(snapshots[-1], "rounds")
+         if r.get("gameMode") == "season" and not _round_complete(r)),
+        key=lambda r: r["roundNumber"],
+        default=None,
+    )
+    scheduled: dict[str, int] = {}
+    if upcoming:
+        for game in upcoming.get("games", []):
+            for side in ("homeId", "awayId"):
+                name = squads.get(game[side])
+                if name:
+                    scheduled[name] = scheduled.get(name, 0) + 1
+
+    # Per-fixture projections, grouped by club. Mapping straight into a dict
+    # keyed on club name would keep only the last fixture and silently drop
+    # the other half of a double gameweek.
+    per_fixture: dict[str, list[ClubProjection]] = {}
+    for projection in clubs:
+        per_fixture.setdefault(projection.club, []).append(projection)
+
+    clubs = [
+        _combine(name, group, scheduled.get(name, len(group)))
+        for name, group in per_fixture.items()
+    ]
+    fixtures = per_fixture
     # Priors must come from players who actually have a record.
     played_so_far = max(games_played.values(), default=0)
     priors = build_priors(
@@ -264,8 +334,8 @@ def load_gameweek(
             continue
 
         club = squads.get(player["squadId"])
-        fixture = fixtures.get(mapping.get(club, ""))
-        if fixture is None:
+        club_fixtures = fixtures.get(mapping.get(club, ""))
+        if not club_fixtures:
             continue
 
         if not proven:
@@ -277,13 +347,19 @@ def load_gameweek(
                 name=player["displayName"],
                 position=player["position"],
                 club=club,
-                opponent=to_efl_name.get(fixture.opponent, fixture.opponent),
-                away=fixture.away,
-                expected_points=project_player(
-                    player, fixture, priors,
-                    games_played=games_played.get(player["squadId"], 0),
+                opponent=" + ".join(
+                    to_efl_name.get(f.opponent, f.opponent) for f in club_fixtures
                 ),
-                fixtures=1,
+                away=club_fixtures[0].away,
+                # A player whose club plays twice accumulates from both.
+                expected_points=sum(
+                    project_player(
+                        player, f, priors,
+                        games_played=games_played.get(player["squadId"], 0),
+                    )
+                    for f in club_fixtures
+                ),
+                fixtures=len(club_fixtures),
                 selected_pct=player.get("percentSelected", 0.0),
                 status=player["status"],
                 proven=proven or player.get("backfilled") == "fpl",
@@ -302,6 +378,7 @@ def load_gameweek(
             for sid, name in squads.items()
             if fixtures.get(mapping.get(name, ""))
         },
+        per_fixture=per_fixture,
         priors=priors,
         games_played=games_played,
     )

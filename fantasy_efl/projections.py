@@ -20,7 +20,12 @@ from .oddsapi import Fixture
 
 @dataclass(frozen=True)
 class ClubProjection:
-    """One club's projected points for one fixture."""
+    """One club's projected points for a gameweek.
+
+    Usually one fixture, but a club playing twice in a Thursday-to-Wednesday
+    window scores from both, so `expected_points` may cover several. The
+    per-fixture detail stays in `fixtures`.
+    """
 
     club: str
     opponent: str
@@ -29,11 +34,27 @@ class ClubProjection:
     p_win: float
     p_draw: float
     profile: GoalProfile
-    source: str  # "exchange" or "bookmakers"
+    source: str  # "exchange", "bookmakers" or "manual"
+
+    #: How many of this club's fixtures the market has priced, and how many the
+    #: schedule says it has. These differ when a double gameweek's second
+    #: fixture is beyond the three-day horizon bookmakers price to -- in which
+    #: case the projection covers only part of the gameweek and says so, rather
+    #: than passing a partial total off as complete.
+    fixture_count: int = 1
+    scheduled_count: int = 1
 
     @property
     def p_clean_sheet(self) -> float:
         return self.profile.p_clean_sheet
+
+    @property
+    def is_double(self) -> bool:
+        return self.scheduled_count > 1
+
+    @property
+    def missing_fixtures(self) -> int:
+        return max(0, self.scheduled_count - self.fixture_count)
 
 
 def project_fixture(
