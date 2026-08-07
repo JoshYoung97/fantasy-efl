@@ -192,12 +192,37 @@ already). Read those before rebuilding either.
 
 ## Contributing
 
-Run the tests. They encode the scoring rules, and several exist specifically
-to stop a plausible-looking change from silently breaking the maths:
+Pull first, branch, then open a pull request:
 
 ```bash
+git pull
+git checkout -b what-you-are-changing
 python -m pytest tests/ -q
+git push -u origin what-you-are-changing
 ```
+
+CI runs the full suite on every pull request against Python 3.10, 3.12 and
+3.14, so a broken change cannot be merged. Run it locally anyway — it takes two
+seconds and saves a round trip.
+
+The tests encode the scoring rules, and several exist specifically to stop a
+plausible-looking change from silently breaking the maths. Use branches for
+anything touching the model: tests catch broken arithmetic, but not a bad
+modelling judgement. `ADJUSTMENT_STRENGTH` is the obvious example — a change
+there is defensible in either direction and deserves a second opinion.
 
 If you change a projection, say what it does to the GW1 squad — the numbers in
 this README came from real market prices and are worth keeping honest.
+
+### Getting a change onto the phone page
+
+Merging is not enough. `data/app.html` is generated and gitignored, and the
+published page is a static artifact republished from Josh's machine. After a
+merge, someone has to pull, re-run the export and build, and republish. Until
+then everyone's phone shows the old numbers whatever `main` says.
+
+### One snapshot collector
+
+Only one machine should run the snapshot task. Several would produce divergent
+histories of what is meant to be one canonical dataset. Commit snapshots
+weekly rather than after every run, or the log fills with data churn.
