@@ -373,3 +373,23 @@ def test_a_proven_keeper_outranks_an_assumed_first_choice():
     proven = estimate_minutes(keeper(appearances=46, shirt=13), games_played=0)
     assumed = estimate_minutes(keeper(appearances=0, shirt=1))
     assert proven.p_60_plus > assumed.p_60_plus
+
+
+def test_priors_exist_from_the_first_gameweek():
+    """A fixed 10-appearance threshold produced no priors until GW10.
+
+    With no priors every rate falls back to zero, so this is not a degradation
+    but a total failure of the player model for the first nine gameweeks.
+    """
+    squad = [make_player(id=i, appearances=1) for i in range(30)]
+    assert build_priors(squad, games_played=1)
+
+
+def test_prior_threshold_scales_with_the_season():
+    """Pre-season it must still reproduce the original 10-appearance bar."""
+    from fantasy_efl.player_model import PRIOR_CONTRIBUTOR_SHARE, SEASON_GAMES
+    assert round(SEASON_GAMES * PRIOR_CONTRIBUTOR_SHARE) == 10
+
+    fringe = [make_player(id=i, appearances=2) for i in range(30)]
+    assert not build_priors(fringe, games_played=0)   # 2 of 46 is noise
+    assert build_priors(fringe, games_played=4)       # 2 of 4 is a regular

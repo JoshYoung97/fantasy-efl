@@ -121,15 +121,31 @@ FIRST_CHOICE_KEEPER_START_PRIOR = 0.70
 BACKUP_KEEPER_START_PRIOR = 0.17
 
 
-def build_priors(players: list[dict]) -> dict[tuple[int, str], dict[str, float]]:
+#: Share of available games a player must have featured in to inform a prior.
+#:
+#: Proportional, not a fixed count. A hardcoded 10 appearances produces *no
+#: priors at all* for the first nine gameweeks, because nobody has played ten
+#: games yet -- and with no priors every rate falls back to zero. Against a
+#: full season this reproduces the previous threshold exactly (0.22 x 46 = 10).
+PRIOR_CONTRIBUTOR_SHARE = 0.22
+
+
+def build_priors(
+    players: list[dict], games_played: int = 0
+) -> dict[tuple[int, str], dict[str, float]]:
     """Mean per-appearance rate for each (division, position) group.
 
     Only players with a meaningful sample contribute, so the prior is not
-    dragged down by squad players with two appearances.
+    dragged down by squad players with two appearances. "Meaningful" scales
+    with how much of the season has been played; pass `games_played=0`
+    pre-season, when the feed still holds last season's totals.
     """
+    basis = games_played or SEASON_GAMES
+    minimum = max(1, round(basis * PRIOR_CONTRIBUTOR_SHARE))
+
     groups: dict[tuple[int, str], list[dict]] = {}
     for p in players:
-        if p["appearances"] >= 10:
+        if p["appearances"] >= minimum:
             groups.setdefault((p["competitionId"], p["position"]), []).append(p)
 
     priors: dict[tuple[int, str], dict[str, float]] = {}

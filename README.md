@@ -110,6 +110,25 @@ property — `tests/test_scoring.py` will tell you if you haven't.
 
 ## Known gaps — read this before trusting a number
 
+**Double gameweeks are silently dropped. This is the largest open bug.** The
+pipeline maps clubs to fixtures with `{p.club: p for p in clubs}`, and a dict
+keeps only the last value — so when a club plays twice, one fixture vanishes
+and its players are projected as if they played once. `PlayerProjection.fixtures`
+is hardcoded to 1 for the same reason.
+
+It does not bite until **GW3, when 70 of 72 clubs play twice**, and it affects
+20 of 42 gameweeks. Fixing it means mapping each club to a *list* of fixtures
+and summing across them; the optimiser needs no change, because the captain
+doubling a summed total is equivalent to doubling each fixture.
+
+One wrinkle to handle when fixing it: odds run only three days ahead, so the
+second fixture of a double may not be priced when the first is. The fix should
+sum whatever the market has priced and report how many of the scheduled
+fixtures that covers, rather than quietly projecting a partial gameweek as if
+it were complete.
+
+
+
 **`ADJUSTMENT_STRENGTH` (player_model.py) is the biggest open risk.** It sets
 how hard fixture context moves a player's rates. At 1.0 defenders prefer hard
 fixtures (defensive volume wins); at 0.5 they prefer easy ones (the undamped

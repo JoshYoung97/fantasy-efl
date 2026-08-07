@@ -149,3 +149,19 @@ def test_overrides_compose():
     alpha = find(gw, "Alpha")
     assert alpha.profile.scored_rate == pytest.approx(1.0)
     assert alpha.profile.conceded_rate == pytest.approx(1.5)
+
+
+def test_played_fixtures_are_read_from_data_not_a_status_string():
+    """No completed-round status has ever been observed in the feed.
+
+    Keying off status == "complete" risks guessing a string that never
+    appears, in which case the gameweek never advances and the season freezes
+    on GW1. A recorded score is the reliable signal.
+    """
+    from fantasy_efl.pipeline import _is_played
+
+    assert _is_played({"homeScore": 2, "awayScore": 1})
+    assert _is_played({"homeScore": 0, "awayScore": 0})   # 0-0 is still played
+    assert _is_played({"homeScore": None, "isFinalized": True})
+    assert not _is_played({"homeScore": None, "isFinalized": False})
+    assert not _is_played({"status": "scheduled"})

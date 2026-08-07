@@ -86,6 +86,16 @@ class Gameweek:
         ]
 
 
+def _is_played(game: dict) -> bool:
+    """Whether a fixture has actually happened.
+
+    Read from the data, not from a status string. A recorded score is the
+    strongest signal; `isFinalized` is accepted as a fallback in case scores
+    arrive later than the flag.
+    """
+    return game.get("homeScore") is not None or bool(game.get("isFinalized"))
+
+
 def override_fixture(
     gw: Gameweek, club_name: str, scored: float, conceded: float
 ) -> list[ClubProjection]:
@@ -212,12 +222,18 @@ def load_gameweek(
     # season's totals until the new one starts, then rolls over -- so the
     # appearance yardstick has to follow, or every player reads as a fringe
     # squad member until spring.
+    #
+    # Played-ness is derived from the data rather than from a status string.
+    # Pre-season every round reads "scheduled" and no other value has ever been
+    # observed, so keying off status == "complete" would be guessing at a
+    # string that may never appear -- and if it never appears, the gameweek
+    # never advances and the season silently freezes on GW1.
     games_played: dict[int, int] = {sid: 0 for sid in squads}
     for rnd in load_snapshot(snapshots[-1], "rounds"):
         if rnd.get("gameMode") != "season":
             continue
         for game in rnd.get("games", []):
-            if game.get("homeScore") is None:
+            if not _is_played(game):
                 continue
             for side in ("homeId", "awayId"):
                 if game[side] in games_played:
@@ -233,7 +249,10 @@ def load_gameweek(
 
     fixtures = {p.club: p for p in clubs}
     # Priors must come from players who actually have a record.
-    priors = build_priors([p for p in raw_players if p["appearances"] > 0])
+    played_so_far = max(games_played.values(), default=0)
+    priors = build_priors(
+        [p for p in raw_players if p["appearances"] > 0], played_so_far
+    )
 
     projected: list[PlayerProjection] = []
     unproven = 0
