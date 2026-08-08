@@ -351,9 +351,8 @@ def load_gameweek(
                 name=player["displayName"],
                 position=player["position"],
                 club=club,
-                opponent=" + ".join(
-                    to_efl_name.get(f.opponent, f.opponent) for f in club_fixtures
-                ),
+                # Already EFL spellings, renamed with the club above.
+                opponent=" + ".join(f.opponent for f in club_fixtures),
                 away=club_fixtures[0].away,
                 # A player whose club plays twice accumulates from both.
                 expected_points=sum(

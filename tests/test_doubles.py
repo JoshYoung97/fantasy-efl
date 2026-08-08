@@ -102,3 +102,21 @@ def test_fixture_lookup_uses_the_same_names_it_was_keyed_with():
         "fixture lookups must use the EFL club name, matching how per_fixture "
         "is keyed, not the bookmaker name"
     )
+
+
+def test_scripts_do_not_reassemble_the_pipeline():
+    """One implementation, so the two cannot drift apart silently.
+
+    A second copy of the pipeline in player_projections.py applied different
+    filters, missed double gameweeks, and never received the corrections made
+    to the minutes model -- while still producing plausible-looking numbers.
+    """
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    for script in ("player_projections.py", "optimal_team.py", "export_app_data.py"):
+        source = (root / "scripts" / script).read_text(encoding="utf-8")
+        assert "project_all(" not in source, (
+            f"{script} builds club projections itself instead of using "
+            f"load_gameweek; that is how the two implementations diverged"
+        )
