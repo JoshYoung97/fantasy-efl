@@ -245,6 +245,92 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
   .row.club-row.div-L1 { border-left-color: var(--silver); }
   .row.club-row.div-L2 { border-left-color: var(--red); }
 
+  .viewnav {
+    display: flex;
+    gap: 2px;
+    margin: 0 -1rem 1.25rem;
+    background: var(--navy);
+    padding: 0 1rem 0.625rem;
+  }
+  .viewnav button {
+    flex: 1;
+    font-family: var(--ui);
+    font-size: 0.8125rem;
+    font-weight: 650;
+    letter-spacing: 0.01em;
+    padding: 0.5rem;
+    min-height: 2.5rem;
+    background: rgba(255, 255, 255, 0.09);
+    color: rgba(255, 255, 255, 0.68);
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+  }
+  .viewnav button[aria-selected="true"] {
+    background: #FFFFFF;
+    color: var(--navy);
+  }
+  .viewnav button:focus-visible { outline: 2px solid #FFFFFF; outline-offset: 2px; }
+
+  .slot {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: 0.75rem;
+    background: var(--surface);
+    border-left: 3px dashed var(--line);
+    padding: 0.6875rem 0.875rem;
+    width: 100%;
+    text-align: left;
+    font-family: var(--ui);
+    font-size: var(--step-0);
+    color: var(--mist);
+    cursor: pointer;
+  }
+  .slot:focus-visible { outline: 2px solid var(--navy-lift); outline-offset: -2px; }
+  .slot .pos { color: var(--mist); }
+  .slot-add { font-family: var(--mono); font-size: 0.75rem; color: var(--navy-lift); }
+
+  .drop {
+    font-family: var(--mono);
+    font-size: 0.625rem;
+    font-weight: 700;
+    background: none;
+    border: 1px solid var(--line);
+    border-radius: 2px;
+    color: var(--mist);
+    padding: 0.25rem 0.375rem;
+    min-height: 1.75rem;
+    margin-left: 0.375rem;
+    cursor: pointer;
+  }
+  .drop:hover, .drop:focus-visible { color: var(--clay); border-color: var(--clay); }
+
+  .plan-warn {
+    font-size: 0.75rem;
+    color: var(--clay);
+    margin-top: 0.375rem;
+  }
+  .picker-head {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+  }
+  .picker-head input {
+    flex: 1;
+    font-family: var(--ui);
+    font-size: 0.875rem;
+    padding: 0.5rem 0.625rem;
+    min-height: 2.5rem;
+    background: var(--raised);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 3px;
+  }
+  .row.pickable { cursor: pointer; }
+  .row.blocked { opacity: 0.4; cursor: not-allowed; }
+
   .divkey {
     display: flex;
     gap: 0.75rem;
@@ -670,6 +756,13 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
     <div class="deadline" id="deadline"></div>
   </header>
 
+  <div class="viewnav" role="tablist">
+    <button id="tab-projections" role="tab" aria-selected="true">Projections</button>
+    <button id="tab-planner" role="tab" aria-selected="false">Planner</button>
+  </div>
+
+  <div id="view-projections">
+
   <section>
     <div class="sec-head">
       <h2>Recommended squad</h2>
@@ -747,6 +840,45 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
       <div class="blind" id="blind"></div>
     </div>
   </section>
+
+  </div><!-- /view-projections -->
+
+  <div id="view-planner" hidden>
+    <section>
+      <div class="sec-head">
+        <h2>Your squad</h2>
+        <select id="planformation" aria-label="Formation"></select>
+      </div>
+      <div class="summary">
+        <div>
+          <div class="total" id="plantotal">0.00</div>
+          <div class="total-note" id="plannote">nothing picked yet</div>
+        </div>
+        <div>
+          <button class="chip" id="planseed" type="button">Fill from model</button>
+          <button class="chip" id="planclear" type="button">Clear</button>
+        </div>
+      </div>
+      <div class="plan-warn" id="planwarn"></div>
+      <ul class="rows" id="planslots"></ul>
+    </section>
+
+    <section>
+      <div class="sec-head"><h2>Club picks</h2><span class="label">2 per gameweek</span></div>
+      <ul class="rows" id="planclubslots"></ul>
+    </section>
+
+    <section id="pickerpanel" hidden>
+      <div class="sec-head">
+        <h2 id="pickertitle">Choose</h2>
+        <button class="chip" id="pickerclose" type="button">Close</button>
+      </div>
+      <div class="picker-head">
+        <input id="pickersearch" type="search" placeholder="Search player or club...">
+      </div>
+      <ul class="rows" id="pickerlist"></ul>
+    </section>
+  </div>
 
   <footer>
     <p>Projections come from de-vigged betting markets for fixture context and
@@ -1507,6 +1639,309 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
   select.addEventListener("change", fillFromMarket);
   [winIn, overIn].forEach((el) => el.addEventListener("input", recalcOdds));
   fillFromMarket();
+
+  // ---- Planner ----------------------------------------------------------
+  //
+  // Build a squad by hand and watch the total move. Reuses pointsFor, so a
+  // player overridden on the projections view carries the same number here.
+  // Two totals disagreeing about the same player would be worse than having
+  // no planner at all.
+
+  // The only legal shapes: seven players, one keeper, and the game's own
+  // bounds of two or three at the back and in midfield.
+  const FORMATIONS = {
+    "1-2-2-2": { GK: 1, DEF: 2, MID: 2, FWD: 2 },
+    "1-2-3-1": { GK: 1, DEF: 2, MID: 3, FWD: 1 },
+    "1-3-2-1": { GK: 1, DEF: 3, MID: 2, FWD: 1 },
+  };
+  const MAX_PER_CLUB = 2;
+  const SLOT_ORDER = ["GK", "DEF", "MID", "FWD"];
+
+  const plan = { formation: "1-2-3-1", picks: [], clubs: [], captain: null };
+
+  const planSlots = document.getElementById("planslots");
+  const planClubSlots = document.getElementById("planclubslots");
+  const planTotal = document.getElementById("plantotal");
+  const planNote = document.getElementById("plannote");
+  const planWarn = document.getElementById("planwarn");
+  const picker = document.getElementById("pickerpanel");
+  const pickerList = document.getElementById("pickerlist");
+  const pickerTitle = document.getElementById("pickertitle");
+  const pickerSearch = document.getElementById("pickersearch");
+
+  let picking = null;
+
+  function clubCount(name, ignoreIndex) {
+    return plan.picks.filter((id, i) => {
+      if (!id || i === ignoreIndex) return false;
+      const row = POOL_BY_ID.get(id);
+      return row && row.club === name;
+    }).length;
+  }
+
+  function planIssues() {
+    const issues = [];
+    const counts = {};
+    plan.picks.forEach((id) => {
+      if (!id) return;
+      const row = POOL_BY_ID.get(id);
+      if (row) counts[row.club] = (counts[row.club] || 0) + 1;
+    });
+    Object.keys(counts).forEach((club) => {
+      if (counts[club] > MAX_PER_CLUB) {
+        issues.push(counts[club] + " players from " + club + ", limit is " + MAX_PER_CLUB);
+      }
+    });
+    const chosen = plan.clubs.filter(Boolean);
+    if (new Set(chosen).size < chosen.length) issues.push("same club picked twice");
+    return issues;
+  }
+
+  function planPoints() {
+    let total = 0;
+    plan.picks.forEach((id) => {
+      const row = id && POOL_BY_ID.get(id);
+      if (row) total += pointsFor(row);
+    });
+    if (plan.captain && plan.picks.indexOf(plan.captain) !== -1) {
+      const cap = POOL_BY_ID.get(plan.captain);
+      if (cap) total += pointsFor(cap);
+    }
+    plan.clubs.forEach((name) => {
+      const club = name && DATA.clubs.find((c) => c.name === name);
+      if (club) total += club.xp;
+    });
+    return total;
+  }
+
+  function slotPositions() {
+    const shape = FORMATIONS[plan.formation];
+    const out = [];
+    SLOT_ORDER.forEach((pos) => {
+      for (let i = 0; i < shape[pos]; i++) out.push(pos);
+    });
+    return out;
+  }
+
+  function emptySlot(label, onClick) {
+    const button = el("button", "slot");
+    button.type = "button";
+    button.append(el("div", "pos", label));
+    button.append(el("div", "who", "empty"));
+    button.append(el("div", "slot-add", "+ ADD"));
+    button.addEventListener("click", onClick);
+    return button;
+  }
+
+  function actionButton(text, handler) {
+    const button = el("button", "drop", text);
+    button.type = "button";
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      handler();
+    });
+    return button;
+  }
+
+  function renderPlan() {
+    const positions = slotPositions();
+    while (plan.picks.length < positions.length) plan.picks.push(null);
+    plan.picks.length = positions.length;
+
+    planSlots.replaceChildren();
+    positions.forEach((pos, index) => {
+      const id = plan.picks[index];
+      const row = id && POOL_BY_ID.get(id);
+      if (!row) {
+        planSlots.append(emptySlot(pos, () => openPicker(pos, index)));
+        return;
+      }
+      const li = playerRow(row, { captain: id === plan.captain });
+      const nums = li.querySelector(".nums");
+      if (nums) {
+        nums.append(actionButton(id === plan.captain ? "C" : "MAKE C", () => {
+          plan.captain = plan.captain === id ? null : id;
+          renderPlan();
+        }));
+        nums.append(actionButton("REMOVE", () => {
+          plan.picks[index] = null;
+          if (plan.captain === id) plan.captain = null;
+          renderPlan();
+        }));
+      }
+      planSlots.append(li);
+    });
+
+    planClubSlots.replaceChildren();
+    for (let index = 0; index < 2; index++) {
+      const name = plan.clubs[index];
+      const club = name && DATA.clubs.find((c) => c.name === name);
+      if (!club) {
+        planClubSlots.append(emptySlot("CLUB", () => openPicker(null, index)));
+        continue;
+      }
+      const li = clubTableRow(club, index + 1);
+      const nums = li.querySelector(".nums");
+      if (nums) {
+        nums.append(actionButton("REMOVE", () => {
+          plan.clubs[index] = null;
+          renderPlan();
+        }));
+      }
+      planClubSlots.append(li);
+    }
+
+    const picked = plan.picks.filter(Boolean).length;
+    planTotal.textContent = fmt(planPoints());
+    planNote.textContent = picked + " of " + positions.length + " picked" +
+      (plan.captain ? ", captain doubled" : ", no captain yet");
+    planWarn.textContent = planIssues().join("   ");
+  }
+
+  function openPicker(position, index) {
+    picking = { position: position, index: index };
+    picker.hidden = false;
+    pickerTitle.textContent = position ? "Choose a " + position : "Choose a club";
+    pickerSearch.value = "";
+    renderPicker();
+    if (picker.scrollIntoView) picker.scrollIntoView({ block: "start" });
+  }
+
+  function closePicker() {
+    picker.hidden = true;
+    picking = null;
+  }
+
+  function renderPicker() {
+    if (!picking) return;
+    const query = pickerSearch.value.trim().toLowerCase();
+    pickerList.replaceChildren();
+
+    if (picking.position === null) {
+      DATA.clubs
+        .filter((c) => !query || c.name.toLowerCase().indexOf(query) !== -1)
+        .slice(0, 40)
+        .forEach((c) => {
+          const li = clubTableRow(c, "");
+          const taken = plan.clubs.indexOf(c.name) !== -1;
+          li.classList.add(taken ? "blocked" : "pickable");
+          if (taken) {
+            li.title = "already one of your two clubs";
+          } else {
+            li.addEventListener("click", () => {
+              plan.clubs[picking.index] = c.name;
+              closePicker();
+              renderPlan();
+            });
+          }
+          pickerList.append(li);
+        });
+      return;
+    }
+
+    DATA.pool
+      .filter((row) => row.pos === picking.position)
+      .filter((row) => !query ||
+        row.name.toLowerCase().indexOf(query) !== -1 ||
+        row.club.toLowerCase().indexOf(query) !== -1)
+      .sort((a, b) => pointsFor(b) - pointsFor(a))
+      .slice(0, 40)
+      .forEach((row) => {
+        const li = playerRow(row);
+        const already = plan.picks.indexOf(row.id) !== -1;
+        // A club may supply two players; a third would be an illegal squad.
+        // The slot being filled is excluded from the count, so swapping a
+        // player for a team-mate is not blocked by the player leaving.
+        const atLimit = clubCount(row.club, picking.index) >= MAX_PER_CLUB;
+        const blocked = already || atLimit;
+        li.classList.add(blocked ? "blocked" : "pickable");
+        if (blocked) {
+          li.title = already
+            ? "already in your squad"
+            : "already have " + MAX_PER_CLUB + " from " + row.club;
+        } else {
+          li.addEventListener("click", () => {
+            plan.picks[picking.index] = row.id;
+            closePicker();
+            renderPlan();
+          });
+        }
+        pickerList.append(li);
+      });
+  }
+
+  const formationSelect = document.getElementById("planformation");
+  Object.keys(FORMATIONS).forEach((name) => {
+    const option = document.createElement("option");
+    option.value = name;
+    option.textContent = name;
+    if (name === plan.formation) option.selected = true;
+    formationSelect.append(option);
+  });
+
+  formationSelect.addEventListener("change", () => {
+    // Keep whoever still fits the new shape rather than emptying the squad.
+    const kept = plan.picks.filter(Boolean);
+    plan.formation = formationSelect.value;
+    const positions = slotPositions();
+    plan.picks = positions.map(() => null);
+    positions.forEach((pos, index) => {
+      const candidate = kept.find((id) => {
+        const row = POOL_BY_ID.get(id);
+        return row && row.pos === pos && plan.picks.indexOf(id) === -1;
+      });
+      if (candidate) plan.picks[index] = candidate;
+    });
+    if (plan.picks.indexOf(plan.captain) === -1) plan.captain = null;
+    renderPlan();
+  });
+
+  document.getElementById("planseed").addEventListener("click", () => {
+    if (FORMATIONS[DATA.squad.formation]) plan.formation = DATA.squad.formation;
+    formationSelect.value = plan.formation;
+    const positions = slotPositions();
+    plan.picks = positions.map(() => null);
+    const byPosition = {};
+    (DATA.squad.playerIds || []).forEach((id) => {
+      const row = POOL_BY_ID.get(id);
+      if (!row) return;
+      byPosition[row.pos] = byPosition[row.pos] || [];
+      byPosition[row.pos].push(id);
+    });
+    positions.forEach((pos, index) => {
+      const next = (byPosition[pos] || []).shift();
+      if (next) plan.picks[index] = next;
+    });
+    plan.captain = DATA.squad.captain;
+    plan.clubs = (DATA.squad.clubs || []).map((c) => c.name).slice(0, 2);
+    renderPlan();
+  });
+
+  document.getElementById("planclear").addEventListener("click", () => {
+    plan.picks = slotPositions().map(() => null);
+    plan.clubs = [];
+    plan.captain = null;
+    renderPlan();
+  });
+
+  document.getElementById("pickerclose").addEventListener("click", closePicker);
+  pickerSearch.addEventListener("input", renderPicker);
+  renderPlan();
+
+  // View switching.
+  const VIEWS = ["projections", "planner"];
+  function showView(name) {
+    VIEWS.forEach((key) => {
+      const view = document.getElementById("view-" + key);
+      const tab = document.getElementById("tab-" + key);
+      if (view) view.hidden = key !== name;
+      if (tab) tab.setAttribute("aria-selected", String(key === name));
+    });
+  }
+  VIEWS.forEach((name) => {
+    const tab = document.getElementById("tab-" + name);
+    if (tab) tab.addEventListener("click", () => showView(name));
+  });
 
   // Blind spots
   const blind = document.getElementById("blind");
