@@ -1,4 +1,4 @@
-"""Export current projections to data/app_data.json for the mobile page.
+"""Export current projections to data/app_data.json for the web page.
 
     python scripts/export_app_data.py
 
@@ -15,8 +15,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from fantasy_efl.expected import expected_player_points  # noqa: E402
 from fantasy_efl.optimiser import optimise_gameweek  # noqa: E402
-from fantasy_efl.pipeline import MINUTES_GRID, load_gameweek  # noqa: E402
+from fantasy_efl.pipeline import load_gameweek  # noqa: E402
+from fantasy_efl.player_model import player_rates  # noqa: E402
 from fantasy_efl.snapshot import list_snapshots, load_snapshot  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -24,8 +26,6 @@ OUTPUT = ROOT / "data" / "app_data.json"
 
 #: Ownership below which an unrateable player is not worth flagging.
 BLIND_SPOT_OWNERSHIP = 5.0
-
-TOP_N = 20
 
 #: How many gameweeks of fixture counts to show alongside each club.
 #:
@@ -38,31 +38,118 @@ TOP_N = 20
 #: five-use club allocation.
 OUTLOOK_WEEKS = 5
 
+#: How many players per position carry the full per-fixture rate set.
+#:
+#: Every selectable player carrying 21 rate fields per fixture made the page
+#: 1,049 KB, of which roughly 95% was players nobody opens -- downloaded over
+#: mobile data every visit. Forty per position covers anything plausibly
+#: selectable, and the squad and any well-owned player are always included on
+#: top, so the crowd's picks stay inspectable however they rank.
+RATED_PER_POSITION = 40
 
-def _player(p, kickoffs, gw=None, extra=None):
-    out = {
-        "name": p.name, "club": p.club, "pos": p.position,
-        "opp": p.opponent, "away": p.away,
-        "xp": round(p.expected_points, 2),
-        "own": p.selected_pct, "proven": p.proven,
-        # Lockout is rolling: a player locks at their own kickoff, not at a
-        # single gameweek deadline. Showing one deadline for everyone would
-        # hide hours of usable time -- in GW1, 50 clubs stay open 19 hours
-        # after the "deadline" the first fixture implies.
-        "kickoff": kickoffs.get(p.club),
-        # Projection at each minute, so the page can recalculate when team
-        # news lands without reimplementing the scoring maths. Only supplied
-        # for the squad, which is where the minutes controls live -- carrying
-        # it for the whole pool would triple the page for nothing.
-        "curve": gw.minutes_curve(p.id) if gw else [],
-        # Where the slider should start: the model's own minutes estimate,
-        # which sharpens as the season supplies appearances. Starting at 90
-        # would quietly assert every player goes the distance.
-        "xmins": round(gw.expected_minutes(p.id)) if gw else None,
+#: Ownership at which a player is worth carrying regardless of projection.
+#: The three most-owned players in the game rank poorly here, and being able
+#: to look at why is the point.
+ALWAYS_RATE_OWNERSHIP = 1.0
+
+
+def _rate_fields(rates) -> dict:
+    """A PlayerRates as a JSON-safe dict of just the scoring inputs.
+
+    Ships the fixture-adjusted rate the model actually used for every stat
+    the scoring engine reads, so a page can let someone override any one of
+    them individually -- not just expected minutes -- and recompute
+    correctly. `xp` is the model's own total for this fixture at these
+    rates, included so the page's ported scoring logic can be checked
+    against it: if nothing has been overridden, they must match exactly.
+    """
+    return {
+        "goals": round(rates.goals, 4),
+        "assists": round(rates.assists, 4),
+        "ownGoals": round(rates.own_goals, 4),
+        "penaltiesMissed": round(rates.penalties_missed, 4),
+        "yellowCards": round(rates.yellow_cards, 4),
+        "redCards": round(rates.red_cards, 4),
+        "saves": round(rates.saves, 4),
+        "penaltiesSaved": round(rates.penalties_saved, 4),
+        "pCleanSheet": round(rates.p_clean_sheet, 4),
+        "goalsConceded": round(rates.goals_conceded, 4),
+        "clearances": round(rates.clearances, 4),
+        "blocks": round(rates.blocks, 4),
+        "tackles": round(rates.tackles, 4),
+        "interceptions": round(rates.interceptions, 4),
+        "keyPasses": round(rates.key_passes, 4),
+        "shotsOnTarget": round(rates.shots_on_target, 4),
+        "dispersion": rates.dispersion,
+        "xp": round(expected_player_points(rates), 4),
     }
-    if extra:
-        out.update(extra)
-    return out
+
+
+def _pool(gw, kickoffs, squad_ids: set[int]) -> list[dict]:
+    """Every selectable player, with fixture-adjusted rates for each fixture.
+
+    `gw.players` is restricted to status == "playing" because the optimiser
+    must never pick an injured or suspended player -- but a page that lets
+    someone override "the club say he's actually fit" needs that player's
+    row and rates to override, not an absence. Only "eliminated" (no longer
+    in Fantasy EFL's pool at all -- retired, dropped out of the EFL) is left
+    out here.
+
+    One row per player, each carrying a list of fixtures rather than one
+    rate set, so a club playing twice in the gameweek is represented
+    completely: the page sums across a player's fixtures the same way
+    `project_player` does.
+    """
+    # Rank first, so only players worth carrying get the expensive rate set.
+    ranked = sorted(
+        (p for p in gw.players if p.expected_points > 0),
+        key=lambda p: -p.expected_points,
+    )
+    keep: set[int] = set()
+    for position in ("GK", "DEF", "MID", "FWD"):
+        by_position = [p for p in ranked if p.position == position]
+        keep.update(p.id for p in by_position[:RATED_PER_POSITION])
+    keep.update(p.id for p in gw.players if p.selected_pct >= ALWAYS_RATE_OWNERSHIP)
+    keep.update(squad_ids)
+
+    rows = []
+    for player in gw.raw_by_id.values():
+        if player["id"] not in keep:
+            continue
+        if player.get("status") == "eliminated":
+            continue
+        club_fixtures = gw.fixtures_by_club.get(player["squadId"])
+        if not club_fixtures:
+            continue
+
+        games_played = gw.games_played.get(player["squadId"], 0)
+        fixtures = [
+            {
+                "opp": f.opponent,
+                "away": f.away,
+                "kickoff": kickoffs.get(f.club),
+                **_rate_fields(player_rates(player, f, gw.priors, games_played=games_played)),
+            }
+            for f in club_fixtures
+        ]
+
+        rows.append({
+            "id": player["id"],
+            "name": player["displayName"],
+            "pos": player["position"],
+            "club": club_fixtures[0].club,
+            "status": player.get("status", "playing"),
+            "proven": player["appearances"] > 0 or player.get("backfilled") == "fpl",
+            "own": player.get("percentSelected", 0.0),
+            # Where the minutes control should start: the model's own
+            # estimate, which sharpens as the season supplies appearances.
+            # Starting at 90 would quietly assert every player goes the
+            # distance; injured/suspended players correctly start at 0 but
+            # remain fully overridable.
+            "xmins": round(gw.expected_minutes(player["id"])),
+            "fixtures": fixtures,
+        })
+    return rows
 
 
 def main() -> int:
@@ -79,7 +166,6 @@ def main() -> int:
 
     snapshot = list_snapshots()[-1]
     rounds = load_snapshot(snapshot, "rounds")
-    raw = load_snapshot(snapshot, "players")
     squads = {s["id"]: s["name"] for s in load_snapshot(snapshot, "squads")}
 
     # Playoff rounds reuse the same round numbers as gameweeks and carry no
@@ -120,21 +206,12 @@ def main() -> int:
             if name and (name not in kickoffs or game["date"] < kickoffs[name]):
                 kickoffs[name] = game["date"]
 
-    ranked = sorted(gw.players, key=lambda p: -p.expected_points)
-    positions = {
-        pos: [_player(p, kickoffs) for p in ranked if p.position == pos][:TOP_N]
-        for pos in ("GK", "DEF", "MID", "FWD")
-    }
+    pool = _pool(gw, kickoffs, {p.id for p in squad.players})
 
     # Highly-owned players the model cannot rate -- the gap worth knowing about.
     blind = sorted(
-        (
-            p for p in raw
-            if p.get("status") == "playing"
-            and p["appearances"] == 0
-            and p.get("percentSelected", 0) >= BLIND_SPOT_OWNERSHIP
-        ),
-        key=lambda p: -p["percentSelected"],
+        (row for row in pool if not row["proven"] and row["own"] >= BLIND_SPOT_OWNERSHIP),
+        key=lambda row: -row["own"],
     )
 
     payload = {
@@ -143,13 +220,11 @@ def main() -> int:
         "deadline": upcoming["lockoutDate"],
         "squad": {
             "formation": squad.formation,
-            "players": [
-                _player(p, kickoffs, gw, {
-                    "captain": p.id == squad.captain.id,
-                    "vice": bool(squad.vice_captain and p.id == squad.vice_captain.id),
-                })
-                for p in squad.players
-            ],
+            # ids into `pool`, not copies -- the page looks the row up so a
+            # squad member's edits and their pool-row edits are the same edit.
+            "playerIds": [p.id for p in squad.players],
+            "captain": squad.captain.id,
+            "vice": squad.vice_captain.id if squad.vice_captain else None,
             "clubs": [
                 {"name": c.club, "opp": c.opponent, "away": c.away,
                  "xp": round(c.expected_points, 2),
@@ -159,7 +234,7 @@ def main() -> int:
             ],
             "total": round(squad.expected_points, 2),
         },
-        "positions": positions,
+        "pool": pool,
         "clubs": [
             {
                 "name": c.club,
@@ -176,12 +251,11 @@ def main() -> int:
             for c in sorted(gw.clubs, key=lambda c: -c.expected_points)
         ],
         "outlook_weeks": [r["shortName"] for r in outlook_rounds],
-        "minutes_grid": list(MINUTES_GRID),
-        "stats": {"pool": len(gw.players), "unproven": gw.unproven},
+        "stats": {"pool": len(pool), "selectable": len(gw.players),
+                  "unproven": gw.unproven},
         "blindspots": [
-            {"name": p["displayName"], "club": squads[p["squadId"]],
-             "pos": p["position"], "own": p["percentSelected"]}
-            for p in blind[:8]
+            {"name": row["name"], "club": row["club"], "pos": row["pos"], "own": row["own"]}
+            for row in blind[:8]
         ],
     }
 

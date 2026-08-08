@@ -352,6 +352,9 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
   .reset.on { visibility: visible; color: var(--floodlight); border-color: var(--floodlight); }
   .reset:focus-visible { outline: 2px solid var(--floodlight); outline-offset: 1px; }
 
+  .row.unavailable { border-left-color: var(--clay); }
+  /* After .unavailable: once a player has been overridden, that takes
+     precedence over the model's own "not expected to play" warning. */
   .row.adjusted { border-left-color: var(--floodlight); }
   .delta {
     font-family: var(--mono);
@@ -463,6 +466,70 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
   }
   .blind .o { color: var(--clay); font-weight: 650; }
 
+  .search {
+    width: 100%;
+    font-family: var(--ui);
+    font-size: 0.875rem;
+    padding: 0.5rem 0.75rem;
+    min-height: 2.5rem;
+    margin-bottom: 0.75rem;
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 3px;
+  }
+  .search:focus-visible { outline: 2px solid var(--floodlight); outline-offset: 1px; }
+
+  .toolrow {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+    flex-wrap: wrap;
+  }
+  .toolrow .search { flex: 1; min-width: 10rem; margin-bottom: 0; }
+  .sortselect {
+    font-family: var(--ui);
+    font-size: 0.8125rem;
+    font-weight: 650;
+    padding: 0 0.5rem;
+    min-height: 2.5rem;
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 3px;
+  }
+  .sortselect:focus-visible { outline: 2px solid var(--floodlight); outline-offset: 1px; }
+
+  .statstoggle {
+    font-family: var(--mono);
+    font-size: 0.625rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    background: none;
+    border: 1px solid var(--line);
+    border-radius: 2px;
+    color: var(--mist);
+    padding: 0.25rem 0.5rem;
+    min-height: 1.75rem;
+    cursor: pointer;
+    margin-top: 0.375rem;
+  }
+  .statstoggle.on { color: var(--floodlight); border-color: var(--floodlight); }
+  .statstoggle:focus-visible { outline: 2px solid var(--floodlight); outline-offset: 1px; }
+
+  .stats-panel {
+    grid-column: 1 / -1;
+    margin-top: 0.5rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--line);
+  }
+  .stats-panel .odds-grid { grid-template-columns: repeat(2, 1fr); }
+  .stats-panel .reset { margin-top: 0.5rem; }
+
+  @media (min-width: 30rem) {
+    .stats-panel .odds-grid { grid-template-columns: repeat(3, 1fr); }
+  }
+
   footer {
     margin-top: 2.5rem;
     padding-top: 1rem;
@@ -542,7 +609,16 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
   <section>
     <div class="sec-head"><h2>Player pool</h2><span class="label" id="poolcount"></span></div>
     <div class="filters" id="filters" role="group" aria-label="Filter by position"></div>
+    <div class="toolrow">
+      <input class="search" id="poolsearch" type="search" placeholder="Search player or club&hellip;" aria-label="Search the player pool">
+      <select class="sortselect" id="poolsort" aria-label="Sort the player pool">
+        <option value="xp">Sort: projected points</option>
+        <option value="own">Sort: ownership</option>
+        <option value="name">Sort: name</option>
+      </select>
+    </div>
     <ul class="rows" id="pool"></ul>
+    <button class="more" id="morepool" type="button"></button>
   </section>
 
   <section>
@@ -576,6 +652,7 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
 
 <script>
   const DATA = __DATA__;
+  const POOL_BY_ID = new Map(DATA.pool.map((p) => [p.id, p]));
 
   const fmt = (n) => n.toFixed(2);
   const el = (t, c, x) => { const e = document.createElement(t); if (c) e.className = c; if (x !== undefined) e.textContent = x; return e; };
@@ -585,28 +662,329 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
         { weekday: "short", hour: "2-digit", minute: "2-digit" })
     : "";
 
-  function playerRow(p, opts = {}) {
-    const li = el("li", "row" + (p.proven ? "" : " unproven"));
-    li.append(el("div", "pos", p.pos));
+  // ---- Player scoring, ported from fantasy_efl/expected.py -----------
+  //
+  // E[floor(X/k)] != E[X]/k for a floor-function rule ("every 4 clearances"),
+  // so this is the exact expectation over a negative-binomial pmf --
+  // E[floor(X/k)] = sum_{j>=1} P(X >= j*k) -- not the naive mean/k. Verified
+  // against expected_player_points() across 2000 randomised cases spanning
+  // every position and the 59/60/61-minute boundary; largest disagreement
+  // 2e-12, i.e. floating-point noise. This is the only home for this maths
+  // outside Python -- a page that lets someone override one stat rather
+  // than only expected minutes needs to recompute here, not just display.
+  const GOAL_POINTS = { GK: 10, DEF: 7, MID: 6, FWD: 5 };
+  const MAX_X = 200;
+
+  function logGamma(x) {
+    const g = 7;
+    const c = [0.99999999999980993, 676.5203681218851, -1259.1392167224028,
+      771.32342877765313, -176.61502916214059, 12.507343278686905,
+      -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7];
+    if (x < 0.5) return Math.log(Math.PI / Math.sin(Math.PI * x)) - logGamma(1 - x);
+    x -= 1;
+    let a = c[0];
+    const t = x + g + 0.5;
+    for (let i = 1; i < g + 2; i++) a += c[i] / (x + i);
+    return 0.5 * Math.log(2 * Math.PI) + (x + 0.5) * Math.log(t) - t + Math.log(a);
+  }
+
+  function poissonPmf(x, mean) {
+    if (mean <= 0) return x === 0 ? 1 : 0;
+    return Math.exp(-mean + x * Math.log(mean) - logGamma(x + 1));
+  }
+
+  function nbinomPmf(x, mean, dispersion) {
+    const p = dispersion / (dispersion + mean);
+    return Math.exp(logGamma(x + dispersion) - logGamma(dispersion) - logGamma(x + 1) +
+      dispersion * Math.log(p) + x * Math.log1p(-p));
+  }
+
+  function expectedFloorDiv(mean, k, dispersion) {
+    if (mean <= 0 || k <= 0) return 0.0;
+    const pmf = new Array(MAX_X + 1);
+    for (let x = 0; x <= MAX_X; x++) pmf[x] = nbinomPmf(x, mean, dispersion);
+    const cdf = new Array(MAX_X + 1);
+    let running = 0;
+    for (let x = 0; x <= MAX_X; x++) { running += pmf[x]; cdf[x] = running; }
+    let total = 0;
+    for (let j = 1; j * k <= MAX_X; j++) {
+      const survival = 1.0 - cdf[j * k - 1];
+      if (survival < 1e-12) break;
+      total += survival;
+    }
+    return total;
+  }
+
+  // `fixture` is one entry of a pool row's `fixtures` array (or that array
+  // with overridden fields spread on), i.e. the rate fields from
+  // _rate_fields() in scripts/export_app_data.py.
+  function pointsGivenMinutes(position, fixture, minutes, sixtyPlus) {
+    const scale = minutes / 90.0;
+    const disp = fixture.dispersion == null ? 5.0 : fixture.dispersion;
+    let pts = sixtyPlus ? 2.0 : 1.0;
+
+    const goals = fixture.goals * scale;
+    pts += (GOAL_POINTS[position] || 0) * goals;
+    pts += 3.0 * fixture.assists * scale;
+
+    const pHatTrick = goals > 0
+      ? 1.0 - (poissonPmf(0, goals) + poissonPmf(1, goals) + poissonPmf(2, goals))
+      : 0.0;
+    pts += 5.0 * pHatTrick;
+
+    pts -= 3.0 * fixture.ownGoals * scale;
+    pts -= 3.0 * fixture.penaltiesMissed * scale;
+    pts -= 1.0 * fixture.yellowCards * scale;
+    pts -= 3.0 * fixture.redCards * scale;
+
+    if (position === "GK") {
+      pts += 2.0 * expectedFloorDiv(fixture.saves * scale, 3, disp);
+      pts += 5.0 * fixture.penaltiesSaved * scale;
+    }
+    if (position === "GK" || position === "DEF") {
+      if (sixtyPlus) pts += 5.0 * fixture.pCleanSheet;
+      pts -= expectedFloorDiv(fixture.goalsConceded * scale, 2, disp);
+    }
+    if (position === "DEF") {
+      pts += expectedFloorDiv(fixture.clearances * scale, 4, disp);
+      pts += expectedFloorDiv(fixture.blocks * scale, 2, disp);
+      pts += expectedFloorDiv(fixture.tackles * scale, 2, disp);
+    }
+    if (position === "MID") pts += 2.0 * fixture.interceptions * scale;
+    if (position === "MID" || position === "FWD") {
+      pts += expectedFloorDiv(fixture.keyPasses * scale, 2, disp);
+      pts += fixture.shotsOnTarget * scale;
+    }
+    return pts;
+  }
+
+  // The page's minutes control is a single known value (team news, or a
+  // what-if), not a probability split -- the JS equivalent of Python's
+  // deterministic_minutes() + expected_player_points() together.
+  function expectedPointsAtMinutes(position, fixture, minutes) {
+    if (minutes <= 0) return 0.0;
+    return pointsGivenMinutes(position, fixture, minutes, minutes >= 60);
+  }
+
+  // Sums a player's fixtures for the gameweek, applying the same minutes
+  // value to each -- the same convention the old minutes_curve() used for a
+  // double gameweek: one control, summed across both matches.
+  function expectedGameweekPoints(position, fixtures, minutes) {
+    let total = 0;
+    for (const f of fixtures) total += expectedPointsAtMinutes(position, f, minutes);
+    return total;
+  }
+
+  // ---- Shared per-player override state -------------------------------
+  //
+  // Keyed by id, not by row instance, so a player's edits are the same
+  // whether they were made from the squad section or the pool -- they are
+  // the same person, and the squad list is drawn from the pool rows anyway.
+  const overrides = new Map();
+
+  function stateFor(id) {
+    if (!overrides.has(id)) {
+      overrides.set(id, { xmins: POOL_BY_ID.get(id).xmins, fields: {} });
+    }
+    return overrides.get(id);
+  }
+
+  function isAdjusted(id) {
+    if (!overrides.has(id)) return false;
+    const s = overrides.get(id);
+    return s.xmins !== POOL_BY_ID.get(id).xmins || Object.keys(s.fields).length > 0;
+  }
+
+  function effectiveFixtures(row, state) {
+    const keys = Object.keys(state.fields);
+    if (!keys.length) return row.fixtures;
+    return row.fixtures.map((f) => ({ ...f, ...state.fields }));
+  }
+
+  function pointsFor(row) {
+    // Untouched, a player shows the model's own figure rather than a value
+    // recomputed here.
+    //
+    // The two are genuinely different quantities. This page computes points
+    // for a player who plays exactly N minutes; the model averages over the
+    // distribution of how long he might last. Scoring is non-linear in
+    // minutes -- the 60-minute mark is a step, not a slope -- so
+    // E[f(minutes)] is not f(E[minutes]). Recomputing by default put the
+    // squad total 2.32 points adrift of the projection the squad was
+    // actually selected on, with the gap worst for players expected to last
+    // 40-60 minutes, exactly where the step bites.
+    //
+    // Once something *is* overridden the recomputed value is the right one:
+    // saying "he plays 75 minutes" replaces a distribution with a certainty,
+    // and the number should move to reflect that.
+    if (!isAdjusted(row.id)) {
+      return row.fixtures.reduce((sum, f) => sum + f.xp, 0);
+    }
+    const state = stateFor(row.id);
+    return expectedGameweekPoints(row.pos, effectiveFixtures(row, state), state.xmins);
+  }
+
+  const STAT_FIELDS = [
+    { key: "goals", label: "Goals", pos: ["GK", "DEF", "MID", "FWD"] },
+    { key: "assists", label: "Assists", pos: ["GK", "DEF", "MID", "FWD"] },
+    { key: "saves", label: "Saves", pos: ["GK"] },
+    { key: "pCleanSheet", label: "Clean sheet %", pos: ["GK", "DEF"], percent: true },
+    { key: "goalsConceded", label: "Goals conceded", pos: ["GK", "DEF"] },
+    { key: "clearances", label: "Clearances", pos: ["DEF"] },
+    { key: "blocks", label: "Blocks", pos: ["DEF"] },
+    { key: "tackles", label: "Tackles", pos: ["DEF"] },
+    { key: "interceptions", label: "Interceptions", pos: ["MID"] },
+    { key: "keyPasses", label: "Key passes", pos: ["MID", "FWD"] },
+    { key: "shotsOnTarget", label: "Shots on target", pos: ["MID", "FWD"] },
+  ];
+  const fieldsForPosition = (pos) => STAT_FIELDS.filter((f) => f.pos.includes(pos));
+
+  function fixtureLabel(row) {
+    if (!row.fixtures.length) return "no fixture";
+    return row.fixtures.map((f) => f.opp + " (" + (f.away ? "A" : "H") + ")").join(" + ");
+  }
+
+  function earliestKickoff(row) {
+    const times = row.fixtures.map((f) => f.kickoff).filter(Boolean).sort();
+    return times[0];
+  }
+
+  // Builds one player row -- used for both the squad and the pool, so an
+  // edit made in either place is the same edit. `onChange` recalculates
+  // whatever total the caller cares about (the squad total; nothing for a
+  // bare pool row).
+  function playerRow(row, opts = {}) {
+    const state = stateFor(row.id);
+    const li = el("li", "row" +
+      (row.proven ? "" : " unproven") +
+      (row.status !== "playing" ? " unavailable" : "") +
+      (isAdjusted(row.id) ? " adjusted" : ""));
+    li.append(el("div", "pos", row.pos));
 
     const who = el("div", "who");
     const name = el("div", "name");
-    name.append(document.createTextNode(p.name));
-    if (opts.captain) name.append(Object.assign(el("span", "tag tag-c", "C")));
-    if (opts.vice) name.append(Object.assign(el("span", "tag tag-v", "V")));
+    name.append(document.createTextNode(row.name));
+    if (opts.captain) name.append(el("span", "tag tag-c", "C"));
+    if (opts.vice) name.append(el("span", "tag tag-v", "V"));
     who.append(name);
-    let meta = p.club + "  \\u00b7  " + p.opp + " (" + (p.away ? "A" : "H") + ")";
-    // Lock times only in the squad, where they drive a decision. In the pool
-    // they would crowd the row for no gain.
-    if (opts.showLock && p.kickoff) meta += "  \\u00b7  locks " + lockLabel(p.kickoff);
+
+    let meta = row.club + "  \\u00b7  " + fixtureLabel(row);
+    if (row.status !== "playing") meta += "  \\u00b7  " + row.status;
+    const kickoff = earliestKickoff(row);
+    if (opts.showLock && kickoff) meta += "  \\u00b7  locks " + lockLabel(kickoff);
     who.append(el("div", "meta", meta));
     li.append(who);
 
     const nums = el("div", "nums");
-    nums.append(el("div", "xp", fmt(p.xp)));
-    nums.append(el("div", "own", p.own.toFixed(1) + "% owned"));
+    const xp = el("div", "xp", fmt(pointsFor(row)));
+    nums.append(xp);
+    nums.append(el("div", "own", row.own.toFixed(1) + "% owned"));
+    const statsToggle = el("button", "statstoggle", "STATS");
+    statsToggle.type = "button";
+    nums.append(statsToggle);
     li.append(nums);
+
+    function refresh() {
+      xp.textContent = fmt(pointsFor(row));
+      li.classList.toggle("adjusted", isAdjusted(row.id));
+      opts.onChange && opts.onChange();
+    }
+
+    li.append(minutesControl(row, state, refresh));
+
+    const panel = statsPanel(row, state, refresh);
+    panel.hidden = true;
+    statsToggle.addEventListener("click", () => {
+      panel.hidden = !panel.hidden;
+      statsToggle.classList.toggle("on", !panel.hidden);
+    });
+    li.append(panel);
+
     return li;
+  }
+
+  function minutesControl(row, state, refresh) {
+    const wrap = el("div", "mins");
+    const slider = document.createElement("input");
+    slider.type = "range";
+    slider.min = "0";
+    slider.max = "90";
+    slider.step = "1";
+    slider.value = String(state.xmins);
+    slider.setAttribute("aria-label", "Expected minutes for " + row.name);
+
+    const readout = el("div", "mins-val", state.xmins + " mins");
+    const reset = el("button", "reset", "AUTO");
+    reset.type = "button";
+    reset.setAttribute("aria-label", "Use the model's estimate for " + row.name);
+
+    function apply(mins) {
+      state.xmins = mins;
+      slider.value = String(mins);
+      const atDefault = mins === POOL_BY_ID.get(row.id).xmins;
+      readout.textContent = mins + " mins";
+      readout.classList.toggle("set", !atDefault);
+      reset.classList.toggle("on", !atDefault);
+      refresh();
+    }
+
+    slider.addEventListener("input", () => apply(Number(slider.value)));
+    reset.addEventListener("click", () => apply(POOL_BY_ID.get(row.id).xmins));
+    if (state.xmins !== POOL_BY_ID.get(row.id).xmins) { readout.classList.add("set"); reset.classList.add("on"); }
+
+    wrap.append(slider, readout, reset);
+    return wrap;
+  }
+
+  function statsPanel(row, state, refresh) {
+    const panel = el("div", "stats-panel");
+    const grid = el("div", "odds-grid");
+
+    fieldsForPosition(row.pos).forEach((f) => {
+      const field = el("div", "odds-field");
+      const label = document.createElement("label");
+      label.textContent = f.label;
+      const inputId = "stat-" + row.id + "-" + f.key;
+      label.htmlFor = inputId;
+
+      const input = document.createElement("input");
+      input.type = "number";
+      input.id = inputId;
+      input.inputMode = "decimal";
+      input.step = f.percent ? "1" : "0.01";
+      input.min = "0";
+      const baseline = row.fixtures[0] ? row.fixtures[0][f.key] : 0;
+      const current = f.key in state.fields ? state.fields[f.key] : baseline;
+      input.value = f.percent ? Math.round(current * 100) : current.toFixed(2);
+
+      input.addEventListener("change", () => {
+        let v = parseFloat(input.value);
+        if (!Number.isFinite(v) || v < 0) v = 0;
+        state.fields[f.key] = f.percent ? v / 100 : v;
+        refresh();
+      });
+
+      field.append(label, input);
+      grid.append(field);
+    });
+
+    const resetRow = el("div");
+    const reset = el("button", "reset on", "RESET STATS");
+    reset.type = "button";
+    reset.style.visibility = "visible";
+    reset.addEventListener("click", () => {
+      state.fields = {};
+      fieldsForPosition(row.pos).forEach((f) => {
+        const input = panel.querySelector("#stat-" + row.id + "-" + f.key);
+        const baseline = row.fixtures[0] ? row.fixtures[0][f.key] : 0;
+        input.value = f.percent ? Math.round(baseline * 100) : baseline.toFixed(2);
+      });
+      refresh();
+    });
+    resetRow.append(reset);
+
+    panel.append(grid, resetRow);
+    return panel;
   }
 
   function clubRow(c) {
@@ -628,13 +1006,14 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
   document.getElementById("total").textContent = fmt(DATA.squad.total);
   document.getElementById("poolnote").textContent =
     DATA.stats.pool + " players considered";
-  document.getElementById("poolcount").textContent = "top 20 by position";
+
+  const squadRows = DATA.squad.playerIds.map((id) => POOL_BY_ID.get(id));
 
   // Lockout is rolling -- each player locks at their own kickoff, not at one
   // gameweek deadline. Counting down to the first fixture in the round would
   // cost hours of usable time, and those are the hours when team news lands.
-  const squadLocks = DATA.squad.players
-    .map((p) => p.kickoff).filter(Boolean).map((k) => new Date(k)).sort((a, b) => a - b);
+  const squadLocks = squadRows
+    .map(earliestKickoff).filter(Boolean).map((k) => new Date(k)).sort((a, b) => a - b);
   const deadline = squadLocks.length ? squadLocks[0] : new Date(DATA.deadline);
   const lastLock = squadLocks.length ? squadLocks[squadLocks.length - 1] : deadline;
 
@@ -660,101 +1039,37 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
   tick();
   setInterval(tick, 30000);
 
-  // Squad, with a minutes control per player.
-  //
-  // The model estimates minutes from last season's appearance rate, which is
-  // its single largest source of error. Confirmed team news beats that
-  // estimate outright, so each row can be overridden and the total recomputed.
-  // Values come from a curve precomputed in Python rather than a scoring model
-  // reimplemented here, so the maths has exactly one home.
+  // Squad, in formation order. Every row carries the same minutes control
+  // and stats panel as the pool -- an edit here and an edit to the same
+  // player found via the pool are the same edit, because both read and
+  // write stateFor(row.id).
   const squadList = document.getElementById("squad");
   const order = { GK: 0, DEF: 1, MID: 2, FWD: 3 };
-  const GRID = DATA.minutes_grid || [];
-  const overrides = new Map();
 
-  const squadOrder = DATA.squad.players
+  const squadOrder = squadRows
     .slice()
-    .sort((a, b) => order[a.pos] - order[b.pos] || b.xp - a.xp);
-
-  function pointsFor(p) {
-    const idx = overrides.get(p.name);
-    return idx === undefined ? p.xp : (p.curve[idx] ?? p.xp);
-  }
+    .sort((a, b) => order[a.pos] - order[b.pos] || pointsFor(b) - pointsFor(a));
 
   function recalcTotal() {
-    const base = squadOrder.reduce((sum, p) => sum + pointsFor(p), 0);
-    const captain = squadOrder.find((p) => p.captain);
+    const base = squadRows.reduce((sum, row) => sum + pointsFor(row), 0);
+    const captain = POOL_BY_ID.get(DATA.squad.captain);
     const clubs = DATA.squad.clubs.reduce((s, c) => s + c.xp, 0);
-    const total = base + (captain ? pointsFor(captain) : 0) + clubs;
+    const total = base + pointsFor(captain) + clubs;
 
     document.getElementById("total").textContent = fmt(total);
+    const anyAdjusted = squadRows.some((row) => isAdjusted(row.id));
     const shift = total - DATA.squad.total;
-    document.getElementById("totalnote").textContent =
-      overrides.size === 0
-        ? "projected points, captain doubled"
-        : (shift >= 0 ? "+" : "") + shift.toFixed(2) + " vs the model's estimate";
+    document.getElementById("totalnote").textContent = !anyAdjusted
+      ? "projected points, captain doubled"
+      : (shift >= 0 ? "+" : "") + shift.toFixed(2) + " vs the model's estimate";
   }
 
-  function minutesControl(p, row, valueNode) {
-    const wrap = el("div", "mins");
-
-    // The curve is sampled at every minute, so the slider index is simply the
-    // number of minutes -- no interpolation, and both discontinuities (the
-    // appearance point at 1, the doubled appearance and clean sheet at 60)
-    // land exactly where they should.
-    const slider = document.createElement("input");
-    slider.type = "range";
-    slider.min = "0";
-    slider.max = String(GRID.length - 1);
-    slider.step = "1";
-    // Start at the model's own estimate rather than 90. Early in the season
-    // that is well short of a full match, and it sharpens as appearances
-    // accumulate -- so the control opens at something defensible instead of
-    // asserting everyone plays the whole game.
-    const seed = Number.isFinite(p.xmins) ? p.xmins : GRID.length - 1;
-    slider.value = String(Math.max(0, Math.min(GRID.length - 1, seed)));
-    slider.setAttribute("aria-label", "Expected minutes for " + p.name);
-
-    const readout = el("div", "mins-val",
-      Number.isFinite(p.xmins) ? "~" + p.xmins + " mins" : "auto");
-    const reset = el("button", "reset", "AUTO");
-    reset.type = "button";
-    reset.setAttribute("aria-label", "Use the model's estimate for " + p.name);
-
-    function apply(idx) {
-      if (idx === undefined) {
-        overrides.delete(p.name);
-        readout.textContent = Number.isFinite(p.xmins) ? "~" + p.xmins + " mins" : "auto";
-        readout.classList.remove("set");
-        reset.classList.remove("on");
-        row.classList.remove("adjusted");
-      } else {
-        overrides.set(p.name, idx);
-        readout.textContent = GRID[idx] + " mins";
-        readout.classList.add("set");
-        reset.classList.add("on");
-        row.classList.add("adjusted");
-      }
-      valueNode.textContent = fmt(pointsFor(p));
-      recalcTotal();
-    }
-
-    slider.addEventListener("input", () => apply(Number(slider.value)));
-    reset.addEventListener("click", () => {
-      slider.value = String(GRID.length - 1);
-      apply(undefined);
-    });
-
-    wrap.append(slider, readout, reset);
-    return wrap;
-  }
-
-  squadOrder.forEach((p) => {
-    const row = playerRow(p, { captain: p.captain, vice: p.vice, showLock: true });
-    if (GRID.length && p.curve && p.curve.length === GRID.length) {
-      row.append(minutesControl(p, row, row.querySelector(".xp")));
-    }
-    squadList.append(row);
+  squadOrder.forEach((row) => {
+    const isCaptain = row.id === DATA.squad.captain;
+    const isVice = row.id === DATA.squad.vice;
+    squadList.append(playerRow(row, {
+      captain: isCaptain, vice: isVice, showLock: true, onChange: recalcTotal,
+    }));
   });
   recalcTotal();
 
@@ -816,14 +1131,49 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
   });
   renderClubs();
 
-  // Pool with position filter
+  // Full player pool: every selectable player, not just a top 20, with a
+  // position filter, free-text search and a sort choice. Capped at
+  // POOL_SHOWN per filter/search combination with a "show all" button --
+  // the same disclosure pattern as the club table above -- so the initial
+  // render stays light even for a 600-player division on a phone.
   const filters = document.getElementById("filters");
   const pool = document.getElementById("pool");
+  const poolSearchInput = document.getElementById("poolsearch");
+  const poolSortSelect = document.getElementById("poolsort");
+  const morePool = document.getElementById("morepool");
+  const POOL_SHOWN = 30;
+
   let active = "MID";
+  let poolSearch = "";
+  let poolSort = "xp";
+  let poolExpanded = false;
+
+  const SORTERS = {
+    xp: (a, b) => pointsFor(b) - pointsFor(a),
+    own: (a, b) => b.own - a.own,
+    name: (a, b) => a.name.localeCompare(b.name),
+  };
+
+  function poolMatches() {
+    const q = poolSearch.trim().toLowerCase();
+    const rows = DATA.pool.filter((row) => row.pos === active);
+    const filtered = q
+      ? rows.filter((row) => row.name.toLowerCase().includes(q) || row.club.toLowerCase().includes(q))
+      : rows;
+    return filtered.slice().sort(SORTERS[poolSort]);
+  }
 
   function renderPool() {
+    const matches = poolMatches();
+    const shown = poolExpanded ? matches : matches.slice(0, POOL_SHOWN);
     pool.replaceChildren();
-    DATA.positions[active].forEach((p) => pool.append(playerRow(p)));
+    shown.forEach((row) => pool.append(playerRow(row)));
+
+    document.getElementById("poolcount").textContent =
+      matches.length + (poolSearch ? " match" + (matches.length === 1 ? "" : "es") : " selectable");
+    morePool.hidden = matches.length <= POOL_SHOWN;
+    morePool.textContent = poolExpanded ? "Show fewer" : "Show all " + matches.length;
+    morePool.setAttribute("aria-expanded", String(poolExpanded));
   }
 
   ["GK", "DEF", "MID", "FWD"].forEach((pos) => {
@@ -832,29 +1182,37 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
     b.setAttribute("aria-pressed", String(pos === active));
     b.addEventListener("click", () => {
       active = pos;
+      poolExpanded = false;
       filters.querySelectorAll(".chip").forEach((c) =>
         c.setAttribute("aria-pressed", String(c.textContent === pos)));
       renderPool();
     });
     filters.append(b);
   });
+
+  poolSearchInput.addEventListener("input", () => {
+    poolSearch = poolSearchInput.value;
+    poolExpanded = false;
+    renderPool();
+  });
+  poolSortSelect.addEventListener("change", () => {
+    poolSort = poolSortSelect.value;
+    renderPool();
+  });
+  morePool.addEventListener("click", () => {
+    poolExpanded = !poolExpanded;
+    renderPool();
+  });
+
   renderPool();
 
   // ---- Club repricing -------------------------------------------------
   //
   // Club maths ported from goals.py and expected.py, verified against the
   // Python implementation for all 72 fixtures (largest disagreement 6e-9).
-  // This is the only scoring logic duplicated outside Python, and it covers
-  // clubs alone -- player projections need the floor-function distributions,
-  // which stay in one place.
+  // Reuses poissonPmf from the player-scoring port above rather than a
+  // second copy -- same function, (count, rate) either way.
   const MAX_GOALS = 15;
-
-  function poissonPmf(k, rate) {
-    if (rate <= 0) return k === 0 ? 1 : 0;
-    let logFact = 0;
-    for (let i = 2; i <= k; i++) logFact += Math.log(i);
-    return Math.exp(-rate + k * Math.log(rate) - logFact);
-  }
 
   function matchProbabilities(homeRate, awayRate) {
     const home = [], away = [];
