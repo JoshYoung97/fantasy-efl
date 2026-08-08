@@ -948,6 +948,8 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
     const kickoff = earliestKickoff(row);
     if (opts.showLock && kickoff) meta += "  \\u00b7  locks " + lockLabel(kickoff);
     const metaRow = el("div", "meta");
+    // Difficulty of the first fixture; a double gameweek shows the earlier one.
+    const tier = row.fixtures && row.fixtures[0] && row.fixtures[0].tier;
     if (tier) metaRow.append(tierChip(tier));
     metaRow.append(document.createTextNode(meta));
     who.append(metaRow);
@@ -1190,8 +1192,11 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
     li.append(el("div", "pos", String(rank)));
     const who = el("div", "who");
     who.append(el("div", "name", c.name));
-    who.append(el("div", "meta",
+    const clubMeta = el("div", "meta");
+    if (c.tier) clubMeta.append(tierChip(c.tier));
+    clubMeta.append(document.createTextNode(
       c.opp + " (" + (c.away ? "A" : "H") + ")  \\u00b7  CS " + Math.round(c.cs * 100) + "%"));
+    who.append(clubMeta);
     if (c.outlook && c.outlook.length) who.append(outlookStrip(c.outlook));
     li.append(who);
     const nums = el("div", "nums");
@@ -1444,6 +1449,33 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
 """
 
 
+def _smoke_test(page: Path) -> str | None:
+    """Run the built page under node, if it is available.
+
+    The page is assembled by substituting into a template, so a patch that
+    matches nothing fails silently while a neighbouring one applies. That
+    produces code referencing a variable that was never declared -- which
+    throws on the first list row and leaves the whole page blank, with the
+    Python tests entirely unable to see it. Exactly that shipped once.
+
+    Skipped without node rather than failing: the check is a safeguard, not a
+    dependency.
+    """
+    import shutil
+    import subprocess
+
+    if shutil.which("node") is None:
+        return None
+    checker = Path(__file__).resolve().parent / "check_page.js"
+    if not checker.exists():
+        return None
+    result = subprocess.run(
+        ["node", str(checker), str(page)],
+        capture_output=True, text=True, timeout=60,
+    )
+    return None if result.returncode == 0 else (result.stderr or "").strip()
+
+
 def main() -> int:
     if not DATA.exists():
         print("no data -- run: python scripts/export_app_data.py", file=sys.stderr)
@@ -1452,6 +1484,12 @@ def main() -> int:
     payload = json.loads(DATA.read_text(encoding="utf-8"))
     html = TEMPLATE.replace("__DATA__", json.dumps(payload, ensure_ascii=False))
     OUTPUT.write_text(html, encoding="utf-8")
+
+    failure = _smoke_test(OUTPUT)
+    if failure:
+        print(f"wrote {OUTPUT}, but its script throws:", file=sys.stderr)
+        print(f"  {failure}", file=sys.stderr)
+        return 1
 
     print(f"wrote {OUTPUT}  ({len(html) // 1024} KB)")
     print(f"  {payload['gameweek']}, locks {payload['deadline']}")
