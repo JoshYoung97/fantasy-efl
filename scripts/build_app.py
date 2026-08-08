@@ -652,6 +652,18 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
 
 <script>
   const DATA = __DATA__;
+  // Rates arrive as a positional array with a shared key list, because
+  // naming every field on every fixture cost 38% of the payload in repeated
+  // keys. Expand once here so everything downstream works with named fields.
+  (DATA.pool || []).forEach((p) => {
+    (p.fixtures || []).forEach((f) => {
+      if (!f.r) return;
+      DATA.rateKeys.forEach((k, i) => { f[k] = f.r[i]; });
+      f.dispersion = DATA.dispersion;
+      delete f.r;
+    });
+  });
+
   const POOL_BY_ID = new Map(DATA.pool.map((p) => [p.id, p]));
 
   const fmt = (n) => n.toFixed(2);

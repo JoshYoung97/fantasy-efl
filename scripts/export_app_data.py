@@ -15,7 +15,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from fantasy_efl.expected import expected_player_points  # noqa: E402
+from fantasy_efl.expected import (  # noqa: E402
+    DEFAULT_DISPERSION,
+    expected_player_points,
+)
 from fantasy_efl.optimiser import optimise_gameweek  # noqa: E402
 from fantasy_efl.pipeline import load_gameweek  # noqa: E402
 from fantasy_efl.player_model import player_rates  # noqa: E402
@@ -38,19 +41,21 @@ BLIND_SPOT_OWNERSHIP = 5.0
 #: five-use club allocation.
 OUTLOOK_WEEKS = 5
 
-#: How many players per position carry the full per-fixture rate set.
+#: Rate fields, in a fixed order, sent as a positional array rather than an
+#: object per fixture.
 #:
-#: Every selectable player carrying 21 rate fields per fixture made the page
-#: 1,049 KB, of which roughly 95% was players nobody opens -- downloaded over
-#: mobile data every visit. Forty per position covers anything plausibly
-#: selectable, and the squad and any well-owned player are always included on
-#: top, so the crowd's picks stay inspectable however they rank.
-RATED_PER_POSITION = 40
-
-#: Ownership at which a player is worth carrying regardless of projection.
-#: The three most-owned players in the game rank poorly here, and being able
-#: to look at why is the point.
-ALWAYS_RATE_OWNERSHIP = 1.0
+#: Naming every field on every fixture spent 38% of the pool payload on
+#: repeated keys alone. A shared key list plus arrays of numbers carries the
+#: same information for a fraction of the bytes, which is what lets every
+#: player stay in the export -- cutting the pool to the highest-projected few
+#: shrinks the file but makes most of the game unsearchable, and being unable
+#: to look up a player is worse than a larger download.
+RATE_KEYS = (
+    "goals", "assists", "ownGoals", "penaltiesMissed", "yellowCards",
+    "redCards", "saves", "penaltiesSaved", "pCleanSheet", "goalsConceded",
+    "clearances", "blocks", "tackles", "interceptions", "keyPasses",
+    "shotsOnTarget",
+)
 
 
 def _rate_fields(rates) -> dict:
@@ -80,12 +85,27 @@ def _rate_fields(rates) -> dict:
         "interceptions": round(rates.interceptions, 4),
         "keyPasses": round(rates.key_passes, 4),
         "shotsOnTarget": round(rates.shots_on_target, 4),
-        "dispersion": rates.dispersion,
         "xp": round(expected_player_points(rates), 4),
     }
 
 
-def _pool(gw, kickoffs, squad_ids: set[int]) -> list[dict]:
+def _rate_values(rates) -> list[float]:
+    """The same rates as a positional array, ordered by RATE_KEYS.
+
+    Three decimals, and exact zeros as integers. Rates only matter to this
+    precision once something is overridden -- an untouched player shows the
+    model's own figure -- and 37% of these values are zero, because a defender
+    records no saves and a forward no clearances.
+    """
+    fields = _rate_fields(rates)
+    out = []
+    for key in RATE_KEYS:
+        value = round(fields[key], 3)
+        out.append(0 if value == 0 else value)
+    return out
+
+
+def _pool(gw, kickoffs) -> list[dict]:
     """Every selectable player, with fixture-adjusted rates for each fixture.
 
     `gw.players` is restricted to status == "playing" because the optimiser
@@ -100,22 +120,8 @@ def _pool(gw, kickoffs, squad_ids: set[int]) -> list[dict]:
     completely: the page sums across a player's fixtures the same way
     `project_player` does.
     """
-    # Rank first, so only players worth carrying get the expensive rate set.
-    ranked = sorted(
-        (p for p in gw.players if p.expected_points > 0),
-        key=lambda p: -p.expected_points,
-    )
-    keep: set[int] = set()
-    for position in ("GK", "DEF", "MID", "FWD"):
-        by_position = [p for p in ranked if p.position == position]
-        keep.update(p.id for p in by_position[:RATED_PER_POSITION])
-    keep.update(p.id for p in gw.players if p.selected_pct >= ALWAYS_RATE_OWNERSHIP)
-    keep.update(squad_ids)
-
     rows = []
     for player in gw.raw_by_id.values():
-        if player["id"] not in keep:
-            continue
         if player.get("status") == "eliminated":
             continue
         club_fixtures = gw.fixtures_by_club.get(player["squadId"])
@@ -128,7 +134,12 @@ def _pool(gw, kickoffs, squad_ids: set[int]) -> list[dict]:
                 "opp": f.opponent,
                 "away": f.away,
                 "kickoff": kickoffs.get(f.club),
-                **_rate_fields(player_rates(player, f, gw.priors, games_played=games_played)),
+                "xp": _rate_fields(
+                    player_rates(player, f, gw.priors, games_played=games_played)
+                )["xp"],
+                "r": _rate_values(
+                    player_rates(player, f, gw.priors, games_played=games_played)
+                ),
             }
             for f in club_fixtures
         ]
@@ -206,7 +217,7 @@ def main() -> int:
             if name and (name not in kickoffs or game["date"] < kickoffs[name]):
                 kickoffs[name] = game["date"]
 
-    pool = _pool(gw, kickoffs, {p.id for p in squad.players})
+    pool = _pool(gw, kickoffs)
 
     # Highly-owned players the model cannot rate -- the gap worth knowing about.
     blind = sorted(
@@ -235,6 +246,8 @@ def main() -> int:
             "total": round(squad.expected_points, 2),
         },
         "pool": pool,
+        "rateKeys": list(RATE_KEYS),
+        "dispersion": DEFAULT_DISPERSION,
         "clubs": [
             {
                 "name": c.club,

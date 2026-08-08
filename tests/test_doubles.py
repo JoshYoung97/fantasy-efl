@@ -83,3 +83,22 @@ def test_a_round_is_complete_only_when_every_game_is_played():
 
 def test_a_goalless_draw_counts_as_played():
     assert _is_played({"homeScore": 0, "awayScore": 0})
+
+
+def test_fixture_lookup_uses_the_same_names_it_was_keyed_with():
+    """Guards a silent, total data loss.
+
+    Club projections are renamed to EFL spellings, so the fixture store is
+    keyed by EFL name. Looking it up by the bookmaker name instead dropped
+    every club whose two names differ -- seven of them, and all 183 of their
+    players -- with no error anywhere. The optimiser simply never saw them.
+    """
+    import inspect
+
+    from fantasy_efl import pipeline
+
+    source = inspect.getsource(pipeline.load_gameweek)
+    assert "fixtures.get(mapping.get(" not in source, (
+        "fixture lookups must use the EFL club name, matching how per_fixture "
+        "is keyed, not the bookmaker name"
+    )

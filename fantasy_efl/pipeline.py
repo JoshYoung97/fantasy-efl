@@ -334,7 +334,11 @@ def load_gameweek(
             continue
 
         club = squads.get(player["squadId"])
-        club_fixtures = fixtures.get(mapping.get(club, ""))
+        # Keyed by EFL name, because the projections were renamed to EFL
+        # spellings above. Looking up by the bookmaker name silently drops
+        # every club whose two names differ -- seven of them, and all of
+        # their players with them.
+        club_fixtures = fixtures.get(club)
         if not club_fixtures:
             continue
 
@@ -374,9 +378,9 @@ def load_gameweek(
         ambiguous=ambiguous,
         raw_by_id={p["id"]: p for p in raw_players},
         fixtures_by_club={
-            sid: fixtures.get(mapping.get(name, ""))
+            sid: fixtures.get(name)
             for sid, name in squads.items()
-            if fixtures.get(mapping.get(name, ""))
+            if fixtures.get(name)
         },
         per_fixture=per_fixture,
         priors=priors,
