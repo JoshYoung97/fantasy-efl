@@ -5,11 +5,13 @@ from __future__ import annotations
 import pytest
 
 import fantasy_efl.player_model as pm
+from fantasy_efl.expected import expected_player_points
 from fantasy_efl.goals import GoalProfile
 from fantasy_efl.player_model import (
     SHRINKAGE_WEIGHT,
     build_priors,
     estimate_minutes,
+    player_rates,
     project_player,
     shrunk_rate,
 )
@@ -393,3 +395,36 @@ def test_prior_threshold_scales_with_the_season():
     fringe = [make_player(id=i, appearances=2) for i in range(30)]
     assert not build_priors(fringe, games_played=0)   # 2 of 46 is noise
     assert build_priors(fringe, games_played=4)       # 2 of 4 is a regular
+
+
+def test_player_rates_and_project_player_agree():
+    """project_player must be exactly player_rates + expected_player_points.
+
+    The app export needs the rates themselves, not just the final number, so
+    project_player was split into two calls. This pins that the split changed
+    nothing about what gets returned.
+    """
+    p, fixture = make_player(), make_fixture()
+    rates = player_rates(p, fixture, PRIORS)
+    assert expected_player_points(rates) == project_player(p, fixture, PRIORS)
+
+
+def test_player_rates_reflect_the_fixture_even_with_no_chance_of_playing():
+    """An injured player's rates should still be inspectable, just worth zero.
+
+    project_player short-circuits an unavailable player to 0.0 points, but a
+    page letting someone override "he's actually fit" needs the rates that
+    override would multiply against -- they should not have been discarded.
+    """
+    rates = player_rates(make_player(status="injured"), make_fixture(), PRIORS)
+    assert rates.minutes.p_appears == 0.0
+    assert rates.clearances > 0  # the rate exists; only playing time is zero
+
+
+def test_player_rates_minutes_override_matches_project_player():
+    p, fixture = make_player(), make_fixture()
+    rates = player_rates(p, fixture, PRIORS, minutes_override=45)
+    assert rates.minutes.p_short == 1.0
+    assert expected_player_points(rates) == project_player(
+        p, fixture, PRIORS, minutes_override=45
+    )

@@ -302,7 +302,7 @@ def deterministic_minutes(minutes: float) -> MinutesModel:
     return MinutesModel(p_60_plus=0.0, p_short=1.0, mean_minutes_short=minutes)
 
 
-def project_player(
+def player_rates(
     player: dict,
     fixture: ClubProjection,
     priors: dict,
@@ -310,8 +310,14 @@ def project_player(
     minutes_override: float | None = None,
     games_played: int = 0,
     league_average_goals: float = 1.3,
-) -> float:
-    """Expected Fantasy EFL points for one player in one fixture.
+) -> PlayerRates:
+    """The fixture-adjusted per-90 rates behind one player's projection.
+
+    Split out from `project_player` so a caller that wants the rates
+    themselves -- the app export, for a page that lets someone override an
+    individual stat -- has one place to get them, rather than a second
+    implementation that could drift from this one. `project_player` is a
+    thin wrapper around this plus `expected_player_points`.
 
     `minutes_override` replaces the estimated minutes with a known figure, for
     when team news is out. Note that the player's own rates are still converted
@@ -324,8 +330,6 @@ def project_player(
         if minutes_override is None
         else deterministic_minutes(minutes_override)
     )
-    if minutes.p_appears <= 0:
-        return 0.0
 
     # How long one of this player's appearances typically runs. Derived with
     # availability forced on, because appearance length is a property of the
@@ -384,7 +388,31 @@ def project_player(
         yellow_cards=CARD_COST.get(player["position"], 0.12) * 90.0 / MINUTES_IF_LONG,
     )
 
-    return expected_player_points(rates)
+    return rates
+
+
+def project_player(
+    player: dict,
+    fixture: ClubProjection,
+    priors: dict,
+    *,
+    minutes_override: float | None = None,
+    games_played: int = 0,
+    league_average_goals: float = 1.3,
+) -> float:
+    """Expected Fantasy EFL points for one player in one fixture.
+
+    See `player_rates` for what "fixture-adjusted" means here; this is just
+    that plus the scoring engine.
+    """
+    return expected_player_points(
+        player_rates(
+            player, fixture, priors,
+            minutes_override=minutes_override,
+            games_played=games_played,
+            league_average_goals=league_average_goals,
+        )
+    )
 
 
 @dataclass(frozen=True)
