@@ -41,6 +41,11 @@ BLIND_SPOT_OWNERSHIP = 5.0
 #: five-use club allocation.
 OUTLOOK_WEEKS = 5
 
+#: Division codes, from the EFL's own competition ids. The page colours rows
+#: by these using the palette taken from the official division marks: gold for
+#: the Championship, silver for League One, red for League Two.
+DIVISION_CODE = {10: "CH", 11: "L1", 12: "L2"}
+
 #: Rate fields, in a fixed order, sent as a positional array rather than an
 #: object per fixture.
 #:
@@ -105,7 +110,7 @@ def _rate_values(rates) -> list[float]:
     return out
 
 
-def _pool(gw, kickoffs) -> list[dict]:
+def _pool(gw, kickoffs, divisions: dict[int, str]) -> list[dict]:
     """Every selectable player, with fixture-adjusted rates for each fixture.
 
     `gw.players` is restricted to status == "playing" because the optimiser
@@ -147,6 +152,7 @@ def _pool(gw, kickoffs) -> list[dict]:
 
         rows.append({
             "id": player["id"],
+            "div": divisions.get(player["squadId"], ""),
             "name": player["displayName"],
             "pos": player["position"],
             "club": club_fixtures[0].club,
@@ -178,7 +184,13 @@ def main() -> int:
 
     snapshot = list_snapshots()[-1]
     rounds = load_snapshot(snapshot, "rounds")
-    squads = {s["id"]: s["name"] for s in load_snapshot(snapshot, "squads")}
+    squad_rows = load_snapshot(snapshot, "squads")
+    squads = {s["id"]: s["name"] for s in squad_rows}
+    divisions = {
+        s["id"]: DIVISION_CODE.get(s.get("competitionId"), "")
+        for s in squad_rows
+    }
+    division_by_name = {s["name"]: divisions[s["id"]] for s in squad_rows}
 
     # Playoff rounds reuse the same round numbers as gameweeks and carry no
     # fixtures, so they interleave with the real schedule unless filtered out.
@@ -218,7 +230,7 @@ def main() -> int:
             if name and (name not in kickoffs or game["date"] < kickoffs[name]):
                 kickoffs[name] = game["date"]
 
-    pool = _pool(gw, kickoffs)
+    pool = _pool(gw, kickoffs, divisions)
 
     # Highly-owned players the model cannot rate -- the gap worth knowing about.
     blind = sorted(
@@ -242,6 +254,7 @@ def main() -> int:
                  "xp": round(c.expected_points, 2),
                  "kickoff": kickoffs.get(c.club),
                  "tier": c.difficulty,
+                "div": division_by_name.get(c.club, ""),
                 "fx": c.fixture_count, "sched": c.scheduled_count}
                 for c in squad.clubs
             ],
@@ -261,6 +274,7 @@ def main() -> int:
                 "outlook": fixture_counts.get(squad_ids.get(c.club, -1), []),
                 "kickoff": kickoffs.get(c.club),
                 "tier": c.difficulty,
+                "div": division_by_name.get(c.club, ""),
                 "fx": c.fixture_count,
                 "sched": c.scheduled_count,
             }

@@ -21,12 +21,27 @@ OUTPUT = ROOT / "data" / "app.html"
 TEMPLATE = """<title>Fantasy EFL Projections</title>
 <style>
   :root {
-    --ink: #0C1116;
-    --surface: #161E27;
-    --raised: #1E2833;
-    --line: #263241;
-    --text: #E6EBF1;
-    --mist: #8A98A8;
+    /* Taken from the EFL's own division marks rather than chosen: #001489
+       appears in all four, with gold, silver and red distinguishing the
+       Championship, League One and League Two. The navy is too dark to read
+       as an accent on a dark ground, so it does what it does on the official
+       site -- a solid band behind white -- while a brightened relative
+       carries anything interactive. */
+    --navy: #001489;
+    --navy-lift: #4C6FE8;
+    --gold: #B69B42;
+    --silver: #8E8F8F;
+    /* League Two's #BA0C2F is dark enough to vanish against a dark
+       ground -- 0.17 luminance against 0.50 for gold -- so it is lifted
+       here and kept exact in the light theme. */
+    --red: #E42A45;
+
+    --ink: #070B1C;
+    --surface: #101736;
+    --raised: #182044;
+    --line: #232C56;
+    --text: #E8EBF6;
+    --mist: #8E97BC;
     --floodlight: #E9A13B;
     --pitch: #4A8F63;
     --clay: #C2604E;
@@ -39,7 +54,7 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
     --t2: #86A343;
     --t3: #C29A33;
     --t4: #BE6D3C;
-    --t5: #9B3A2F;
+    --t5: #6E2440;
     --t1-ink: #08120B;
     --t2-ink: #0C1206;
     --t3-ink: #14100A;
@@ -57,12 +72,16 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
 
   @media (prefers-color-scheme: light) {
     :root {
-      --ink: #F2F4F7;
+      --ink: #EEF1F8;
       --surface: #FFFFFF;
-      --raised: #FFFFFF;
-      --line: #DDE3EA;
-      --text: #10161D;
-      --mist: #66748A;
+      --raised: #F7F9FD;
+      --line: #D5DCEC;
+      --text: #0A1230;
+      --mist: #5A6690;
+      --navy-lift: #001489;
+      --gold: #8A7328;
+      --silver: #63646B;
+      --red: #9A0A26;
       --floodlight: #B87516;
       --pitch: #35704A;
       --clay: #A8452F;
@@ -71,7 +90,7 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
       --t2: #6E8B34;
       --t3: #A87F1E;
       --t4: #A85628;
-      --t5: #8A2A20;
+      --t5: #5C1B34;
       --t1-ink: #FFFFFF;
       --t2-ink: #FFFFFF;
       --t3-ink: #FFFFFF;
@@ -79,15 +98,27 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
       --t5-ink: #FFFFFF;
     }
   }
+  /* The viewer's toggle stamps data-theme on the root and must win over the
+     media query in both directions, so each theme is restated in full. Listing
+     only the differences here would leave a toggled page half-dressed in the
+     other theme's colours. */
   :root[data-theme="dark"] {
-    --ink: #0C1116; --surface: #161E27; --raised: #1E2833; --line: #263241;
-    --text: #E6EBF1; --mist: #8A98A8; --floodlight: #E9A13B;
-    --pitch: #4A8F63; --clay: #C2604E;
+    --ink: #070B1C; --surface: #101736; --raised: #182044; --line: #232C56;
+    --text: #E8EBF6; --mist: #8E97BC;
+    --navy-lift: #4C6FE8; --gold: #B69B42; --silver: #8E8F8F; --red: #E42A45;
+    --floodlight: #E9A13B; --pitch: #4A8F63; --clay: #C2604E;
+    --t1: #4E9E5F; --t2: #86A343; --t3: #C29A33; --t4: #BE6D3C; --t5: #6E2440;
+    --t1-ink: #08120B; --t2-ink: #0C1206; --t3-ink: #14100A;
+    --t4-ink: #FBEFE8; --t5-ink: #FCEDEA;
   }
   :root[data-theme="light"] {
-    --ink: #F2F4F7; --surface: #FFFFFF; --raised: #FFFFFF; --line: #DDE3EA;
-    --text: #10161D; --mist: #66748A; --floodlight: #B87516;
-    --pitch: #35704A; --clay: #A8452F;
+    --ink: #EEF1F8; --surface: #FFFFFF; --raised: #F7F9FD; --line: #D5DCEC;
+    --text: #0A1230; --mist: #5A6690;
+    --navy-lift: #001489; --gold: #8A7328; --silver: #63646B; --red: #9A0A26;
+    --floodlight: #B87516; --pitch: #35704A; --clay: #A8452F;
+    --t1: #3B8A4C; --t2: #6E8B34; --t3: #A87F1E; --t4: #A85628; --t5: #5C1B34;
+    --t1-ink: #FFFFFF; --t2-ink: #FFFFFF; --t3-ink: #FFFFFF;
+    --t4-ink: #FFFFFF; --t5-ink: #FFFFFF;
   }
 
   * { box-sizing: border-box; }
@@ -120,12 +151,16 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
     position: sticky;
     top: 0;
     z-index: 10;
-    background: color-mix(in srgb, var(--ink) 94%, transparent);
-    backdrop-filter: blur(12px);
-    border-bottom: 1px solid var(--line);
-    padding: 1rem 0 0.875rem;
-    margin-bottom: 1.5rem;
+    background: var(--navy);
+    color: #FFFFFF;
+    border-bottom: 3px solid var(--navy-lift);
+    padding: 0.875rem 1rem 0.8125rem;
+    margin: 0 -1rem 1.5rem;
   }
+  header .label { color: rgba(255, 255, 255, 0.62); }
+  header .deadline { color: rgba(255, 255, 255, 0.68); }
+  header h1 { color: #FFFFFF; }
+  header .countdown { color: #FFFFFF; }
   .head-row {
     display: flex;
     align-items: baseline;
@@ -201,8 +236,32 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
     border-left: 3px solid var(--pitch);
     padding: 0.6875rem 0.875rem;
   }
-  .row.unproven { border-left-color: var(--mist); }
+  .row.div-CH { border-left-color: var(--gold); }
+  .row.div-L1 { border-left-color: var(--silver); }
+  .row.div-L2 { border-left-color: var(--red); }
+  .row.unproven { opacity: 0.82; }
   .row.club-row { border-left-color: var(--floodlight); }
+  .row.club-row.div-CH { border-left-color: var(--gold); }
+  .row.club-row.div-L1 { border-left-color: var(--silver); }
+  .row.club-row.div-L2 { border-left-color: var(--red); }
+
+  .divkey {
+    display: flex;
+    gap: 0.75rem;
+    font-size: 0.625rem;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--mist);
+    margin-bottom: 0.5rem;
+    flex-wrap: wrap;
+  }
+  .divkey span { display: inline-flex; align-items: center; gap: 0.3125rem; }
+  .divkey i {
+    width: 0.75rem;
+    height: 3px;
+    border-radius: 1px;
+    display: inline-block;
+  }
 
   .pos {
     font-family: var(--mono);
@@ -281,9 +340,9 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
     .chip { transition: background-color 0.12s ease, color 0.12s ease; }
   }
   .chip[aria-pressed="true"] {
-    background: var(--floodlight);
-    color: var(--ink);
-    border-color: var(--floodlight);
+    background: var(--navy-lift);
+    color: #FFFFFF;
+    border-color: var(--navy-lift);
   }
   .chip:focus-visible,
   a:focus-visible { outline: 2px solid var(--floodlight); outline-offset: 2px; }
@@ -656,6 +715,7 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
       </div>
     </div>
 
+    <div class="divkey" id="divkey"></div>
     <div class="tier-key" id="tierkey"></div>
     <div class="outlook-key" id="outlookkey" aria-hidden="true"></div>
     <ul class="rows" id="clubtable"></ul>
@@ -931,6 +991,7 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
   function playerRow(row, opts = {}) {
     const state = stateFor(row.id);
     const li = el("li", "row" +
+      (row.div ? " div-" + row.div : "") +
       (row.proven ? "" : " unproven") +
       (row.status !== "playing" ? " unavailable" : "") +
       (isAdjusted(row.id) ? " adjusted" : ""));
@@ -1068,7 +1129,7 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
   }
 
   function clubRow(c) {
-    const li = el("li", "row club-row");
+    const li = el("li", "row club-row" + (c.div ? " div-" + c.div : ""));
     li.append(el("div", "pos", c.away ? "AWAY" : "HOME"));
     const who = el("div", "who");
     who.append(el("div", "name", c.name));
@@ -1166,6 +1227,19 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
   document.getElementById("clubcount").textContent =
     DATA.outlook_weeks.length + "-week fixture count";
 
+  const divKey = document.getElementById("divkey");
+  if (divKey) {
+    [["CH", "Championship"], ["L1", "League One"], ["L2", "League Two"]]
+      .forEach(([code, name]) => {
+        const wrap = el("span");
+        const swatch = el("i");
+        swatch.style.background =
+          code === "CH" ? "var(--gold)" : code === "L1" ? "var(--silver)" : "var(--red)";
+        wrap.append(swatch, document.createTextNode(name));
+        divKey.append(wrap);
+      });
+  }
+
   const tierKey = document.getElementById("tierkey");
   if (tierKey) {
     tierKey.append(document.createTextNode("fixture "));
@@ -1188,7 +1262,7 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
   }
 
   function clubTableRow(c, rank) {
-    const li = el("li", "row club-row");
+    const li = el("li", "row club-row" + (c.div ? " div-" + c.div : ""));
     li.append(el("div", "pos", String(rank)));
     const who = el("div", "who");
     who.append(el("div", "name", c.name));
