@@ -31,6 +31,21 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
     --pitch: #4A8F63;
     --clay: #C2604E;
 
+    /* Fixture difficulty, 1 (most favourable) to 5 (least). Steps through
+       the palette's own green and clay rather than a generic traffic light,
+       so it reads as part of the page. Text colour flips at tier 3, where
+       the ground stops being light enough for dark type. */
+    --t1: #4E9E5F;
+    --t2: #86A343;
+    --t3: #C29A33;
+    --t4: #BE6D3C;
+    --t5: #9B3A2F;
+    --t1-ink: #08120B;
+    --t2-ink: #0C1206;
+    --t3-ink: #14100A;
+    --t4-ink: #FBEFE8;
+    --t5-ink: #FCEDEA;
+
     --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
     --ui: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 
@@ -51,6 +66,17 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
       --floodlight: #B87516;
       --pitch: #35704A;
       --clay: #A8452F;
+      /* Deepened for contrast against a white ground. */
+      --t1: #3B8A4C;
+      --t2: #6E8B34;
+      --t3: #A87F1E;
+      --t4: #A85628;
+      --t5: #8A2A20;
+      --t1-ink: #FFFFFF;
+      --t2-ink: #FFFFFF;
+      --t3-ink: #FFFFFF;
+      --t4-ink: #FFFFFF;
+      --t5-ink: #FFFFFF;
     }
   }
   :root[data-theme="dark"] {
@@ -280,6 +306,35 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
     color: var(--mist);
   }
   .fx.double { background: var(--floodlight); color: var(--ink); }
+
+  .tier {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--mono);
+    font-size: 0.625rem;
+    font-weight: 700;
+    min-width: 1.125rem;
+    height: 1.125rem;
+    border-radius: 2px;
+    margin-right: 0.375rem;
+    vertical-align: 0.05em;
+  }
+  .tier-1 { background: var(--t1); color: var(--t1-ink); }
+  .tier-2 { background: var(--t2); color: var(--t2-ink); }
+  .tier-3 { background: var(--t3); color: var(--t3-ink); }
+  .tier-4 { background: var(--t4); color: var(--t4-ink); }
+  .tier-5 { background: var(--t5); color: var(--t5-ink); }
+
+  .tier-key {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    font-size: 0.625rem;
+    color: var(--mist);
+    margin-bottom: 0.75rem;
+    flex-wrap: wrap;
+  }
   .fx.blank { opacity: 0.35; }
 
   .outlook-key {
@@ -601,6 +656,7 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
       </div>
     </div>
 
+    <div class="tier-key" id="tierkey"></div>
     <div class="outlook-key" id="outlookkey" aria-hidden="true"></div>
     <ul class="rows" id="clubtable"></ul>
     <button class="more" id="moreclubs" type="button"></button>
@@ -668,6 +724,13 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
 
   const fmt = (n) => n.toFixed(2);
   const el = (t, c, x) => { const e = document.createElement(t); if (c) e.className = c; if (x !== undefined) e.textContent = x; return e; };
+
+  // Fixture difficulty, straight from the market's price for the match.
+  function tierChip(tier) {
+    const chip = el("span", "tier tier-" + tier, String(tier));
+    chip.title = "fixture difficulty " + tier + " of 5";
+    return chip;
+  }
 
   const lockLabel = (iso) => iso
     ? new Date(iso).toLocaleString(undefined,
@@ -884,7 +947,10 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
     if (row.status !== "playing") meta += "  \\u00b7  " + row.status;
     const kickoff = earliestKickoff(row);
     if (opts.showLock && kickoff) meta += "  \\u00b7  locks " + lockLabel(kickoff);
-    who.append(el("div", "meta", meta));
+    const metaRow = el("div", "meta");
+    if (tier) metaRow.append(tierChip(tier));
+    metaRow.append(document.createTextNode(meta));
+    who.append(metaRow);
     li.append(who);
 
     const nums = el("div", "nums");
@@ -1097,6 +1163,13 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
 
   document.getElementById("clubcount").textContent =
     DATA.outlook_weeks.length + "-week fixture count";
+
+  const tierKey = document.getElementById("tierkey");
+  if (tierKey) {
+    tierKey.append(document.createTextNode("fixture "));
+    for (let t = 1; t <= 5; t++) tierKey.append(tierChip(t));
+    tierKey.append(document.createTextNode(" 1 easiest, 5 hardest"));
+  }
 
   const key = document.getElementById("outlookkey");
   DATA.outlook_weeks.forEach((w) =>

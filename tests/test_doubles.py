@@ -158,3 +158,31 @@ def test_stored_odds_replay_identically(tmp_path):
 def test_stored_odds_without_any_saved_payload_errors_clearly(tmp_path):
     from fantasy_efl.snapshot import list_odds
     assert list_odds(tmp_path) == []
+
+
+def test_difficulty_tiers_run_from_favourable_to_hopeless():
+    from fantasy_efl.projections import difficulty_tier
+
+    assert difficulty_tier(0.733) == 1   # Middlesbrough at home to Lincoln
+    assert difficulty_tier(0.409) == 2   # West Ham away at Burnley
+    assert difficulty_tier(0.326) == 3   # Burnley at home to West Ham
+    assert difficulty_tier(0.096) == 5   # Lincoln away at Middlesbrough
+
+
+def test_every_probability_lands_in_a_tier():
+    from fantasy_efl.projections import difficulty_tier
+    tiers = {difficulty_tier(p / 100) for p in range(101)}
+    assert tiers == {1, 2, 3, 4, 5}
+
+
+def test_difficulty_never_rises_as_a_fixture_gets_easier():
+    from fantasy_efl.projections import difficulty_tier
+    tiers = [difficulty_tier(p / 100) for p in range(101)]
+    assert tiers == sorted(tiers, reverse=True)
+
+
+def test_a_balanced_round_is_not_forced_into_extreme_tiers():
+    """Quintiles would rank a coin flip 'hard' because others were closer."""
+    from fantasy_efl.projections import difficulty_tier
+    balanced = [difficulty_tier(p) for p in (0.33, 0.34, 0.35, 0.36, 0.37)]
+    assert set(balanced) == {3}

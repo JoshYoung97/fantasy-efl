@@ -134,6 +134,7 @@ def _pool(gw, kickoffs) -> list[dict]:
                 "opp": f.opponent,
                 "away": f.away,
                 "kickoff": kickoffs.get(f.club),
+                "tier": f.difficulty,
                 "xp": _rate_fields(
                     player_rates(player, f, gw.priors, games_played=games_played)
                 )["xp"],
@@ -240,7 +241,8 @@ def main() -> int:
                 {"name": c.club, "opp": c.opponent, "away": c.away,
                  "xp": round(c.expected_points, 2),
                  "kickoff": kickoffs.get(c.club),
-                 "fx": c.fixture_count, "sched": c.scheduled_count}
+                 "tier": c.difficulty,
+                "fx": c.fixture_count, "sched": c.scheduled_count}
                 for c in squad.clubs
             ],
             "total": round(squad.expected_points, 2),
@@ -258,6 +260,7 @@ def main() -> int:
                 "cs": round(c.profile.p_clean_sheet, 3),
                 "outlook": fixture_counts.get(squad_ids.get(c.club, -1), []),
                 "kickoff": kickoffs.get(c.club),
+                "tier": c.difficulty,
                 "fx": c.fixture_count,
                 "sched": c.scheduled_count,
             }
