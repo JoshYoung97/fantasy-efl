@@ -87,7 +87,8 @@ One person should fetch live; everyone else replays. About 5 MB a season.
 | `python scripts/player_projections.py` | Ranked players by position |
 | `python scripts/export_app_data.py` | Data for the web page |
 | `python scripts/build_app.py` | Build `data/app.html` |
-| `python -m pytest tests/ -q` | 182 tests |
+| `python scripts/build_match_history.py` | Reconstruct match data from snapshots |
+| `python -m pytest tests/ -q` | 213 tests |
 
 `optimal_team.py` takes:
 
@@ -150,10 +151,19 @@ Resolves itself a few gameweeks into the season.
 
 **The minutes model is calibrated, not measured.** The feed reports
 appearances, not minutes, and counts a five-minute cameo the same as a full
-match — worth about 0.5 points per appearance. Recoverable from snapshot
-deltas once real gameweeks have been played.
+match — worth about 0.5 points per appearance.
 
 **Cards are assumed**, not fed. Position-level allowances in `CARD_COST`.
+
+Both are now measurable. `scripts/build_match_history.py` differences the
+snapshots into per-match lines and recovers minutes and cards from the points
+residual — everything else in a score is observable, so the leftover is
+appearance points less card deductions. It reports rather than applies: a
+measured value only beats an assumption if the reconstruction behind it is
+sound, and that needs looking at first. Run it after each gameweek.
+
+On a simulated gameweek over the real pool it recovered a 0.723 start share as
+0.749, and a defender card rate of 0.130 as 0.145.
 
 **No multi-gameweek horizon.** Odds run three days ahead. The obvious
 substitute — last season's club points — does not predict current market
