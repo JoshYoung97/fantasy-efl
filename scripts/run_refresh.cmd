@@ -28,5 +28,11 @@ if errorlevel 1 (
     exit /b 1
 )
 
+"%PYTHON%" scripts\publish_page.py >> "%LOG%" 2>&1
+if errorlevel 1 (
+    echo [%date% %time%] FAILED at publish - built page not live >> "%LOG%"
+    exit /b 1
+)
+
 echo [%date% %time%] ok >> "%LOG%"
 endlocal

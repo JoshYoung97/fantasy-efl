@@ -69,7 +69,8 @@ Refreshing daily uses about 90.
 | `python scripts/player_projections.py` | Ranked players by position |
 | `python scripts/export_app_data.py` | Data for the web page |
 | `python scripts/build_app.py` | Build `data/app.html` |
-| `python -m pytest tests/ -q` | 182 tests |
+| `python scripts/publish_page.py` | Push `data/app.html` to `gh-pages` |
+| `python -m pytest tests/ -q` | 185 tests |
 
 `optimal_team.py` takes:
 
@@ -219,10 +220,25 @@ this README came from real market prices and are worth keeping honest.
 
 ### Getting a change onto the phone page
 
-Merging is not enough. `data/app.html` is generated and gitignored, and the
-published page is a static artifact republished from Josh's machine. After a
-merge, someone has to pull, re-run the export and build, and republish. Until
-then everyone's phone shows the old numbers whatever `main` says.
+The published page lives on the `gh-pages` branch (GitHub Pages, deployed from
+that branch — no build service involved), kept deliberately separate from
+`main` so a page rebuilt twice daily doesn't fill `main`'s history with
+regenerated-file diffs. `scripts/publish_page.py` pushes `data/app.html`
+there as `index.html`; it's the last step of `run_refresh.cmd`, so the
+routine twice-daily refresh (new odds, not new code) reaches the live URL on
+its own.
+
+Merging a **code** change is not enough by itself, though — `data/app.html`
+is generated and gitignored, and only a machine with the odds credentials
+runs the pipeline (deliberately: the API key must never reach a browser or
+CI). After merging a change to the model or the page, someone still has to
+pull and run
+
+```bash
+python scripts/export_app_data.py && python scripts/build_app.py && python scripts/publish_page.py
+```
+
+once by hand — after that, the next scheduled refresh keeps it current.
 
 ### One snapshot collector
 
