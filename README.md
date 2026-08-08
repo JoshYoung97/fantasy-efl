@@ -30,7 +30,11 @@ The rules differ in ways that change the whole approach:
   Where the market has priced only one of them — odds run three days ahead —
   the shortfall is reported rather than passed off as a whole gameweek.
 - **Two clubs per gameweek, each usable 5 times per season.** A season-long
-  allocation problem with no FPL equivalent. Currently unsolved.
+  allocation problem with no FPL equivalent, solved exactly by min-cost
+  flow in `allocation.py` — greedy fails because using a club now costs one
+  of only five chances and their best fixture may be months away. Doubles
+  are not the constraint: 744 are available across the season for 84
+  selections, so which clubs to spend uses on is the whole question.
 
 ---
 
@@ -88,7 +92,8 @@ One person should fetch live; everyone else replays. About 5 MB a season.
 | `python scripts/export_app_data.py` | Data for the web page |
 | `python scripts/build_app.py` | Build `data/app.html` |
 | `python scripts/build_match_history.py` | Reconstruct match data from snapshots |
-| `python -m pytest tests/ -q` | 213 tests |
+| `python scripts/plan_clubs.py --strength` | Plan club uses across the season |
+| `python -m pytest tests/ -q` | 228 tests |
 
 `optimal_team.py` takes:
 
@@ -165,10 +170,18 @@ sound, and that needs looking at first. Run it after each gameweek.
 On a simulated gameweek over the real pool it recovered a 0.723 start share as
 0.749, and a defender card rate of 0.130 as 0.145.
 
-**No multi-gameweek horizon.** Odds run three days ahead. The obvious
-substitute — last season's club points — does not predict current market
-expectations (r = +0.12 overall, −0.16 in League One), so forward projections
-are deliberately absent rather than fabricated.
+**No multi-gameweek horizon, and no club strength rating.** Odds run three
+days ahead. Worse, a single round cannot identify club strength at all: every
+club appears exactly once, so only differences within a fixture are visible,
+never levels across a division. The obvious substitute — last season's club
+points — does not predict current market expectations (r = +0.12 overall,
+−0.16 in League One).
+
+`plan_clubs.py --strength` therefore weights clubs by their projected points
+in the *current* round, which measures the fixture as much as the club. It is
+a placeholder. Once several gameweeks have accumulated and clubs have met
+different opponents, a proper rating becomes identifiable and the same solver
+produces the real plan with no change to it.
 
 ---
 
