@@ -56,7 +56,25 @@ shell history. On Mac or Linux, export `ODDS_API_KEY` however you normally
 would.
 
 **Budget:** each run costs 3 Odds API credits against a 500/month free tier.
-Refreshing daily uses about 90.
+Refreshing daily uses about 90. Keys are per person — sharing one means
+everyone draws from the same 500 and it runs dry mid-season.
+
+### Working from the same numbers
+
+Odds move continuously, so the same code run an hour apart gives different
+projections. Every live fetch is stored under `data/odds/` and committed, and
+any script will replay the most recent one instead of fetching:
+
+```bash
+python scripts/optimal_team.py --stored-odds
+```
+
+That needs no API key at all and costs no credits, so a collaborator can pull
+the repo and reproduce your numbers exactly before they have a key of their
+own. It also builds an archive of what the market expected before each match,
+which is what a proper check of the model against results will need.
+
+One person should fetch live; everyone else replays. About 5 MB a season.
 
 ---
 

@@ -139,6 +139,22 @@ def fetch_odds(
     the quota headers so callers can log consumption rather than discover the
     limit by hitting it.
     """
+    payload, quota = _fetch_raw(
+        sport_key, markets=markets, regions=regions,
+        api_key=api_key, timeout=timeout,
+    )
+    return parse_fixtures(payload), quota
+
+
+def _fetch_raw(
+    sport_key: str,
+    *,
+    markets: tuple[str, ...] = ("h2h",),
+    regions: str = "uk",
+    api_key: str | None = None,
+    timeout: int = 30,
+) -> tuple[list[dict], Quota]:
+    """One competition's raw payload, plus the quota headers."""
     api_key = api_key or os.environ.get("ODDS_API_KEY")
     if not api_key:
         raise OddsApiError(
@@ -172,7 +188,18 @@ def fetch_odds(
     except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
         raise OddsApiError(f"request for {sport_key} failed: {exc}") from None
 
-    fixtures = [
+    return payload, quota
+
+
+def parse_fixtures(payload: list[dict]) -> list[Fixture]:
+    """Build fixtures from a raw API payload.
+
+    Separate from fetching so a stored payload replays identically. Odds move
+    continuously, so two people fetching at different times get different
+    projections from the same code -- replaying one stored response is the
+    only way for a group to work from the same numbers.
+    """
+    return [
         Fixture(
             id=event["id"],
             sport_key=event["sport_key"],
@@ -183,7 +210,6 @@ def fetch_odds(
         )
         for event in payload
     ]
-    return fixtures, quota
 
 
 def fetch_all_efl(
@@ -193,10 +219,28 @@ def fetch_all_efl(
     api_key: str | None = None,
 ) -> tuple[dict[str, list[Fixture]], Quota]:
     """Fetch every EFL division. Costs 3 x len(markets) x len(regions) credits."""
-    out: dict[str, list[Fixture]] = {}
+    raw, quota = fetch_all_efl_raw(
+        markets=markets, regions=regions, api_key=api_key
+    )
+    return {division: parse_fixtures(payload) for division, payload in raw.items()}, quota
+
+
+def fetch_all_efl_raw(
+    *,
+    markets: tuple[str, ...] = ("h2h",),
+    regions: str = "uk",
+    api_key: str | None = None,
+) -> tuple[dict[str, list[dict]], Quota]:
+    """The same fetch, returning what the API actually sent.
+
+    Kept raw so it can be stored verbatim and replayed later. Parsed objects
+    would lock the stored copy to today's field handling; the payload will
+    still make sense to a version of this code that reads more from it.
+    """
+    out: dict[str, list[dict]] = {}
     quota = Quota(None, None, None)
     for division, key in SPORT_KEYS.items():
-        out[division], quota = fetch_odds(
+        out[division], quota = _fetch_raw(
             key, markets=markets, regions=regions, api_key=api_key
         )
     return out, quota

@@ -102,6 +102,43 @@ def load_snapshot(path: Path, feed: str = "players") -> list | dict:
         return json.load(handle)
 
 
+#: Stored odds payloads, kept beside the EFL snapshots.
+DEFAULT_ODDS_DIR = Path(__file__).resolve().parent.parent / "data" / "odds"
+
+
+def save_odds(payload: dict, odds_dir: Path | None = None) -> Path:
+    """Store a raw odds response so it can be replayed.
+
+    Odds move continuously, so the same code run an hour apart gives different
+    projections. Storing the payload is what lets several people work from
+    identical numbers, and costs nothing extra -- the fetch has already
+    happened. It also builds an archive of what the market expected before
+    each match, which is the raw material for checking the model against
+    results later.
+    """
+    odds_dir = Path(odds_dir) if odds_dir else DEFAULT_ODDS_DIR
+    odds_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%SZ")
+    target = odds_dir / f"{stamp}.json.gz"
+    with gzip.open(target, "wt", encoding="utf-8") as handle:
+        json.dump(payload, handle, separators=(",", ":"))
+    return target
+
+
+def list_odds(odds_dir: Path | None = None) -> list[Path]:
+    """Stored odds payloads, oldest first."""
+    odds_dir = Path(odds_dir) if odds_dir else DEFAULT_ODDS_DIR
+    if not odds_dir.exists():
+        return []
+    return sorted(p for p in odds_dir.glob("*.json.gz"))
+
+
+def load_odds(path: Path) -> dict:
+    """Read a stored odds payload back."""
+    with gzip.open(Path(path), "rt", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
 def list_snapshots(data_dir: Path | None = None) -> list[Path]:
     """Every stored snapshot, oldest first."""
     data_dir = Path(data_dir) if data_dir else DEFAULT_DATA_DIR

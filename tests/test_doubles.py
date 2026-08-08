@@ -120,3 +120,41 @@ def test_scripts_do_not_reassemble_the_pipeline():
             f"{script} builds club projections itself instead of using "
             f"load_gameweek; that is how the two implementations diverged"
         )
+
+
+def test_stored_odds_replay_identically(tmp_path):
+    """Shared numbers depend on this: a stored payload must parse the same.
+
+    Odds move continuously, so the same code an hour apart gives different
+    projections. Replaying one stored response is how a group works from
+    identical inputs.
+    """
+    from fantasy_efl.oddsapi import parse_fixtures
+    from fantasy_efl.snapshot import list_odds, load_odds, save_odds
+
+    payload = {
+        "Championship": [{
+            "id": "abc", "sport_key": "soccer_efl_champ",
+            "commence_time": "2026-08-15T14:00:00Z",
+            "home_team": "Alpha", "away_team": "Beta",
+            "bookmakers": [{"key": "x", "markets": [{"key": "h2h", "outcomes": [
+                {"name": "Alpha", "price": 2.1}, {"name": "Beta", "price": 3.6},
+                {"name": "Draw", "price": 3.3}]}]}],
+        }]
+    }
+    save_odds(payload, tmp_path)
+    stored = list_odds(tmp_path)
+    assert len(stored) == 1
+
+    replayed = load_odds(stored[0])
+    assert replayed == payload
+
+    direct = parse_fixtures(payload["Championship"])
+    from_store = parse_fixtures(replayed["Championship"])
+    assert [f.id for f in direct] == [f.id for f in from_store]
+    assert direct[0].consensus() == from_store[0].consensus()
+
+
+def test_stored_odds_without_any_saved_payload_errors_clearly(tmp_path):
+    from fantasy_efl.snapshot import list_odds
+    assert list_odds(tmp_path) == []

@@ -14,7 +14,7 @@ from .club_names import load_mapping
 from .expected import ClubOutcome, expected_club_points
 from .goals import GoalProfile, match_probabilities
 from .fpl_backfill import FplError, apply_backfill, fetch_fpl_players, match_keepers
-from .oddsapi import fetch_all_efl
+from .oddsapi import fetch_all_efl_raw, parse_fixtures
 from .player_model import (
     PlayerProjection,
     build_priors,
@@ -22,7 +22,7 @@ from .player_model import (
     project_player,
 )
 from .projections import ClubProjection, project_all
-from .snapshot import list_snapshots, load_snapshot
+from .snapshot import list_odds, list_snapshots, load_odds, load_snapshot, save_odds
 
 
 #: Minutes sampled when building a per-player projection curve.
@@ -224,6 +224,7 @@ def load_gameweek(
     *,
     use_fpl_backfill: bool = False,
     include_unproven: bool = True,
+    stored_odds: bool = False,
 ) -> Gameweek:
     """Build projections for every selectable player and club.
 
@@ -233,6 +234,11 @@ def load_gameweek(
 
     `use_fpl_backfill` is off because the live FPL API drops relegated clubs
     entirely, so it recovers nobody. See `fpl_backfill` for the detail.
+
+    `stored_odds` replays the most recent saved odds payload instead of
+    fetching. Odds move continuously, so two people fetching an hour apart get
+    different projections from identical code -- replaying a stored response is
+    how a group works from the same numbers, and it needs no API key at all.
     """
     snapshots = list_snapshots()
     if not snapshots:
@@ -280,7 +286,20 @@ def load_gameweek(
                 if game[side] in games_played:
                     games_played[game[side]] += 1
 
-    club_projections = project_all(fetch_all_efl()[0])
+    if stored_odds:
+        stored = list_odds()
+        if not stored:
+            raise RuntimeError(
+                "no stored odds -- run once with live odds first, or pull them "
+                "from the repo"
+            )
+        raw = load_odds(stored[-1])
+    else:
+        raw, _ = fetch_all_efl_raw()
+        save_odds(raw)
+    club_projections = project_all(
+        {division: parse_fixtures(payload) for division, payload in raw.items()}
+    )
     clubs = [c for cs in club_projections.values() for c in cs]
     # Both sides of the fixture need EFL spellings, or a club and its
     # opponent can appear under different names for the same team.

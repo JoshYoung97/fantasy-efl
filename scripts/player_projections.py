@@ -28,10 +28,19 @@ def main() -> int:
     parser.add_argument("--top", type=int, default=8, help="rows per position")
     parser.add_argument("--proven-only", action="store_true",
                         help="exclude players with no EFL record")
+    parser.add_argument("--stored-odds", action="store_true",
+                        help="replay the last saved odds instead of fetching. "
+                             "Needs no API key, costs no credits, and gives "
+                             "everyone working from the same repo identical "
+                             "numbers.")
     args = parser.parse_args()
 
     try:
-        gw = load_gameweek(ROOT, include_unproven=not args.proven_only)
+        gw = load_gameweek(
+            ROOT,
+            include_unproven=not args.proven_only,
+            stored_odds=args.stored_odds,
+        )
     except RuntimeError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
