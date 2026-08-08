@@ -802,6 +802,24 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
   }
 
   function pointsFor(row) {
+    // Untouched, a player shows the model's own figure rather than a value
+    // recomputed here.
+    //
+    // The two are genuinely different quantities. This page computes points
+    // for a player who plays exactly N minutes; the model averages over the
+    // distribution of how long he might last. Scoring is non-linear in
+    // minutes -- the 60-minute mark is a step, not a slope -- so
+    // E[f(minutes)] is not f(E[minutes]). Recomputing by default put the
+    // squad total 2.32 points adrift of the projection the squad was
+    // actually selected on, with the gap worst for players expected to last
+    // 40-60 minutes, exactly where the step bites.
+    //
+    // Once something *is* overridden the recomputed value is the right one:
+    // saying "he plays 75 minutes" replaces a distribution with a certainty,
+    // and the number should move to reflect that.
+    if (!isAdjusted(row.id)) {
+      return row.fixtures.reduce((sum, f) => sum + f.xp, 0);
+    }
     const state = stateFor(row.id);
     return expectedGameweekPoints(row.pos, effectiveFixtures(row, state), state.xmins);
   }

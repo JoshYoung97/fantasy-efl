@@ -38,6 +38,20 @@ BLIND_SPOT_OWNERSHIP = 5.0
 #: five-use club allocation.
 OUTLOOK_WEEKS = 5
 
+#: How many players per position carry the full per-fixture rate set.
+#:
+#: Every selectable player carrying 21 rate fields per fixture made the page
+#: 1,049 KB, of which roughly 95% was players nobody opens -- downloaded over
+#: mobile data every visit. Forty per position covers anything plausibly
+#: selectable, and the squad and any well-owned player are always included on
+#: top, so the crowd's picks stay inspectable however they rank.
+RATED_PER_POSITION = 40
+
+#: Ownership at which a player is worth carrying regardless of projection.
+#: The three most-owned players in the game rank poorly here, and being able
+#: to look at why is the point.
+ALWAYS_RATE_OWNERSHIP = 1.0
+
 
 def _rate_fields(rates) -> dict:
     """A PlayerRates as a JSON-safe dict of just the scoring inputs.
@@ -71,7 +85,7 @@ def _rate_fields(rates) -> dict:
     }
 
 
-def _pool(gw, kickoffs) -> list[dict]:
+def _pool(gw, kickoffs, squad_ids: set[int]) -> list[dict]:
     """Every selectable player, with fixture-adjusted rates for each fixture.
 
     `gw.players` is restricted to status == "playing" because the optimiser
@@ -86,8 +100,22 @@ def _pool(gw, kickoffs) -> list[dict]:
     completely: the page sums across a player's fixtures the same way
     `project_player` does.
     """
+    # Rank first, so only players worth carrying get the expensive rate set.
+    ranked = sorted(
+        (p for p in gw.players if p.expected_points > 0),
+        key=lambda p: -p.expected_points,
+    )
+    keep: set[int] = set()
+    for position in ("GK", "DEF", "MID", "FWD"):
+        by_position = [p for p in ranked if p.position == position]
+        keep.update(p.id for p in by_position[:RATED_PER_POSITION])
+    keep.update(p.id for p in gw.players if p.selected_pct >= ALWAYS_RATE_OWNERSHIP)
+    keep.update(squad_ids)
+
     rows = []
     for player in gw.raw_by_id.values():
+        if player["id"] not in keep:
+            continue
         if player.get("status") == "eliminated":
             continue
         club_fixtures = gw.fixtures_by_club.get(player["squadId"])
@@ -178,7 +206,7 @@ def main() -> int:
             if name and (name not in kickoffs or game["date"] < kickoffs[name]):
                 kickoffs[name] = game["date"]
 
-    pool = _pool(gw, kickoffs)
+    pool = _pool(gw, kickoffs, {p.id for p in squad.players})
 
     # Highly-owned players the model cannot rate -- the gap worth knowing about.
     blind = sorted(
@@ -223,7 +251,8 @@ def main() -> int:
             for c in sorted(gw.clubs, key=lambda c: -c.expected_points)
         ],
         "outlook_weeks": [r["shortName"] for r in outlook_rounds],
-        "stats": {"pool": len(pool), "unproven": gw.unproven},
+        "stats": {"pool": len(pool), "selectable": len(gw.players),
+                  "unproven": gw.unproven},
         "blindspots": [
             {"name": row["name"], "club": row["club"], "pos": row["pos"], "own": row["own"]}
             for row in blind[:8]
