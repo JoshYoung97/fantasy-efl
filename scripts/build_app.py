@@ -452,6 +452,9 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
   }
   .fx.double { background: var(--floodlight); color: var(--ink); }
 
+  .own.elite-up { color: var(--pitch); }
+  .own.elite-down { color: var(--clay); }
+
   .tier {
     display: inline-flex;
     align-items: center;
@@ -1151,7 +1154,19 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
     const nums = el("div", "nums");
     const xp = el("div", "xp", fmt(pointsFor(row)));
     nums.append(xp);
-    nums.append(el("div", "own", row.own.toFixed(1) + "% owned"));
+    // Elite ownership sits beside the overall figure when it has been
+    // collected. The gap between them is the point: a player the field
+    // ignores and the top managers back is not a differential.
+    const ownText = Number.isFinite(row.elite)
+      ? row.own.toFixed(1) + "%  elite " + row.elite.toFixed(0) + "%"
+      : row.own.toFixed(1) + "% owned";
+    const own = el("div", "own", ownText);
+    if (Number.isFinite(row.elite) && row.elite - row.own >= 10) {
+      own.classList.add("elite-up");
+    } else if (Number.isFinite(row.elite) && row.own - row.elite >= 10) {
+      own.classList.add("elite-down");
+    }
+    nums.append(own);
     const statsToggle = el("button", "statstoggle", "STATS");
     statsToggle.type = "button";
     nums.append(statsToggle);

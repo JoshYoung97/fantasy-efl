@@ -15,6 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from fantasy_efl.elite import load as load_elite  # noqa: E402
 from fantasy_efl.expected import (  # noqa: E402
     DEFAULT_DISPERSION,
     expected_player_points,
@@ -110,7 +111,7 @@ def _rate_values(rates) -> list[float]:
     return out
 
 
-def _pool(gw, kickoffs, divisions: dict[int, str]) -> list[dict]:
+def _pool(gw, kickoffs, divisions: dict[int, str], elite=None) -> list[dict]:
     """Every selectable player, with fixture-adjusted rates for each fixture.
 
     `gw.players` is restricted to status == "playing" because the optimiser
@@ -153,6 +154,11 @@ def _pool(gw, kickoffs, divisions: dict[int, str]) -> list[dict]:
         rows.append({
             "id": player["id"],
             "div": divisions.get(player["squadId"], ""),
+            # Ownership among the top-ranked managers, where it has been
+            # collected. Absent rather than zero when it has not, so the
+            # page can tell "they avoid him" from "we cannot see yet".
+            "elite": (elite.players.get(player["id"]) if elite and elite.usable else None),
+            "eliteC": (elite.captains.get(player["id"]) if elite and elite.usable else None),
             "name": player["displayName"],
             "pos": player["position"],
             "club": club_fixtures[0].club,
@@ -230,7 +236,8 @@ def main() -> int:
             if name and (name not in kickoffs or game["date"] < kickoffs[name]):
                 kickoffs[name] = game["date"]
 
-    pool = _pool(gw, kickoffs, divisions)
+    elite = load_elite()
+    pool = _pool(gw, kickoffs, divisions, elite)
 
     # Highly-owned players the model cannot rate -- the gap worth knowing about.
     blind = sorted(
@@ -262,6 +269,9 @@ def main() -> int:
         },
         "pool": pool,
         "rateKeys": list(RATE_KEYS),
+        "elite": {"sample": elite.sample, "roundId": elite.round_id,
+                  "collectedAt": elite.collected_at,
+                  "usable": elite.usable},
         "dispersion": DEFAULT_DISPERSION,
         "clubs": [
             {
