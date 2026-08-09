@@ -457,6 +457,66 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
   .elite-up { color: var(--pitch); font-weight: 700; }
   .elite-down { color: var(--clay); font-weight: 700; }
 
+  /* ---- Live (rolling lockout) ---- */
+  .livesum {
+    display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 14px;
+  }
+  .livesum .stat {
+    flex: 1 1 120px; background: var(--raised); border: 1px solid var(--line);
+    border-radius: 10px; padding: 10px 12px;
+  }
+  .livesum .stat b { display: block; font-size: 22px; line-height: 1.2; }
+  .livesum .stat span {
+    display: block; font-size: 11px; letter-spacing: .06em;
+    text-transform: uppercase; color: var(--mist); margin-top: 2px;
+  }
+  .livesum .stat.open b { color: var(--floodlight); }
+  .livesum .stat.shut b { color: var(--mist); }
+  .livesum .stat.gain b { color: var(--pitch); }
+
+  .liverow {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px;
+    background: var(--surface); margin-bottom: 8px;
+  }
+  .liverow.shut { opacity: .55; }
+  .liverow .slot {
+    font-size: 11px; font-weight: 700; color: var(--mist);
+    min-width: 30px; letter-spacing: .06em;
+  }
+  .liverow .who { flex: 1 1 160px; min-width: 0; }
+  .liverow .who .nm { font-weight: 700; }
+  .liverow .who .sub { font-size: 12px; color: var(--mist); }
+  .liverow .when {
+    font-variant-numeric: tabular-nums; font-size: 13px; text-align: right;
+    min-width: 70px;
+  }
+  .liverow .when.soon { color: var(--floodlight); font-weight: 700; }
+  .liverow .when.done { color: var(--mist); }
+  .liverow .xp {
+    font-variant-numeric: tabular-nums; font-weight: 700; min-width: 48px;
+    text-align: right;
+  }
+  .swap {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    width: 100%; padding-top: 8px; margin-top: 2px;
+    border-top: 1px dashed var(--line);
+  }
+  .swap .arrow { color: var(--pitch); font-weight: 700; }
+  .swap .cand { flex: 1 1 auto; font-size: 13px; }
+  .swap .delta { color: var(--pitch); font-weight: 700; font-variant-numeric: tabular-nums; }
+  .swap button {
+    background: var(--pitch); color: #fff; border: 0; border-radius: 8px;
+    padding: 5px 12px; font: inherit; font-size: 12px; font-weight: 700;
+    cursor: pointer;
+  }
+  .livehead {
+    font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--mist); margin: 16px 0 8px;
+  }
+  .livenote { margin-top: 18px; color: var(--mist); font-size: 13px; }
+  .livenote p { margin: 0 0 8px; }
+
   .tier {
     display: inline-flex;
     align-items: center;
@@ -1234,6 +1294,7 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
     <div class="brand">FEFL CLUB</div>
     <nav class="viewnav" role="tablist" aria-label="Sections">
       <button id="tab-planner" role="tab" aria-selected="true">Team Planner</button>
+      <button id="tab-live" role="tab" aria-selected="false">Live</button>
       <button id="tab-players" role="tab" aria-selected="false">Player Projections</button>
       <button id="tab-clubs" role="tab" aria-selected="false">Team Projections</button>
       <button id="tab-history" role="tab" aria-selected="false">Historical Data</button>
@@ -1356,6 +1417,23 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
         <div class="detail-empty" id="clubdetailempty">Select a club to see its breakdown and reprice it from live odds.</div>
         <div id="clubdetailbody" hidden></div>
       </aside>
+    </div>
+  </div>
+
+  <!-- ===== Live (rolling lockout) ===== -->
+  <div id="view-live" class="view" hidden>
+    <div class="detailcol wide">
+      <div class="detail-head"><h2>Live</h2></div>
+      <div id="livesummary" class="livesum"></div>
+      <div id="livebody"></div>
+      <div class="livenote">
+        <p>Players lock at their own kickoff, not at the gameweek deadline.
+        Anyone still open can be changed right up to their match, so team news
+        an hour before a 15:00 kickoff is still actionable.</p>
+        <p>To act on team news, set a player&rsquo;s expected minutes to 0 on
+        the Team Planner &mdash; the best legal replacement appears here, and
+        only players whose own match has not started are offered.</p>
+      </div>
     </div>
   </div>
 
@@ -3409,7 +3487,7 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
       .setAttribute("aria-selected", String(pickerMode === "teams"));
   }
 
-  function renderPlanner() { renderPitch(); renderPickerTable(); }
+  function renderPlanner() { renderPitch(); renderPickerTable(); renderLive(); }
 
   const formationSelect = document.getElementById("planformation");
   Object.keys(FORMATIONS).forEach((name) => {
@@ -3618,12 +3696,247 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
     renderPickerTable();
   });
 
+  // ---- Live: the rolling lockout ------------------------------------
+  //
+  // Players lock at their own club's kickoff, not at one gameweek deadline.
+  // In GW1 that is about 19 hours between the Friday deadline and most of
+  // Saturday's 15:00 kickoffs, and it is the one structural edge this game
+  // has over FPL: an hour before a match, team news is still actionable for
+  // every player who has not kicked off yet.
+  //
+  // This view answers the only question that matters in that window: which
+  // picks can I still change, and what is the best change available. A
+  // replacement must itself be unlocked -- a player whose match has already
+  // started cannot be brought in -- which is the constraint that makes this
+  // more than a re-run of the optimiser.
+
+  //: Below this a swap is not worth the risk of touching a working squad.
+  const SWAP_MIN_GAIN = 0.15;
+  //: Inside this, a lock is imminent enough to highlight.
+  const SOON_MS = 3 * 3600 * 1000;
+
+  const playerLock = (row) => {
+    const times = (row.fixtures || []).map((f) => f.kickoff).filter(Boolean).sort();
+    return times[0] || null;
+  };
+  const isLocked = (iso, now) => !!iso && new Date(iso) <= now;
+  // A club's projected total, honouring any odds override made on the page.
+  // Distinct from clubPoints(), which scores a single modelled scoreline.
+  const clubTotal = (club) => (clubAdjusted(club) ? clubXp(club) : club.xp);
+
+  function untilLabel(iso, now) {
+    if (!iso) return "no fixture";
+    const left = new Date(iso) - now;
+    if (left <= 0) return "locked";
+    const d = Math.floor(left / 86400000);
+    const h = Math.floor(left / 3600000) % 24;
+    const m = Math.floor(left / 60000) % 60;
+    if (d > 0) return d + "d " + h + "h";
+    if (h > 0) return h + "h " + String(m).padStart(2, "0") + "m";
+    return m + "m";
+  }
+
+  // The best still-available replacement for one squad slot, or null.
+  //
+  // `claimed` carries the candidates already offered to earlier slots, so two
+  // open slots cannot both be told to sign the same player. Without it three
+  // empty midfield slots all name the best midfielder, which is not advice
+  // anyone can act on -- and two club slots would name the same club, which
+  // is not even a legal squad.
+  function bestSwap(slotIndex, now, claimed, claimedClubs) {
+    const pos = slotPositions()[slotIndex];
+    if (!pos) return null;
+    const currentId = plan.picks[slotIndex];
+    const current = currentId ? POOL_BY_ID.get(currentId) : null;
+    // A locked slot is settled; nothing to offer.
+    if (current && isLocked(playerLock(current), now)) return null;
+
+    const held = new Set(plan.picks.filter((id, i) => id && i !== slotIndex));
+    const currentPts = current ? pointsFor(current) : 0;
+    let best = null, bestPts = -Infinity;
+    DATA.pool.forEach((row) => {
+      if (row.pos !== pos || held.has(row.id) || claimed.has(row.id)) return;
+      if (row.status !== "playing" || !row.fixtures.length) return;
+      if (isLocked(playerLock(row), now)) return;
+      const fromClub = clubCount(row.club, slotIndex) +
+        (claimedClubs.get(row.club) || 0);
+      if (fromClub >= MAX_PER_CLUB) return;
+      const pts = pointsFor(row);
+      if (pts > bestPts) { best = row; bestPts = pts; }
+    });
+    if (!best || (current && best.id === current.id)) return null;
+    const gain = bestPts - currentPts;
+    return gain >= SWAP_MIN_GAIN ? { row: best, gain, current } : null;
+  }
+
+  function bestClubSwap(slotIndex, now, claimed) {
+    const currentName = plan.clubs[slotIndex];
+    const current = currentName && CLUB_BY_NAME.get(currentName);
+    if (current && isLocked(current.kickoff, now)) return null;
+    const held = new Set(plan.clubs.filter((n, i) => n && i !== slotIndex));
+    const currentPts = current ? clubTotal(current) : 0;
+    let best = null, bestPts = -Infinity;
+    (DATA.clubs || []).forEach((club) => {
+      if (held.has(club.name) || claimed.has(club.name)) return;
+      if (isLocked(club.kickoff, now)) return;
+      const pts = clubTotal(club);
+      if (pts > bestPts) { best = club; bestPts = pts; }
+    });
+    if (!best || (current && best.name === current.name)) return null;
+    const gain = bestPts - currentPts;
+    return gain >= SWAP_MIN_GAIN ? { club: best, gain, current } : null;
+  }
+
+  function liveRow(opts) {
+    const { label, name, sub, when, pts, locked, swap, onApply } = opts;
+    const row = el("div", "liverow" + (locked ? " shut" : ""));
+    row.append(el("div", "slot", label));
+    const who = el("div", "who");
+    who.append(el("div", "nm", name));
+    who.append(el("div", "sub", sub));
+    row.append(who);
+    const soon = !locked && when.ms !== null && when.ms <= SOON_MS;
+    row.append(el("div", "when" + (locked ? " done" : soon ? " soon" : ""), when.text));
+    row.append(el("div", "xp", fmt(pts)));
+    if (swap) {
+      const box = el("div", "swap");
+      box.append(el("span", "arrow", "\\u2192"));
+      box.append(el("span", "cand", swap.name));
+      box.append(el("span", "delta", "+" + swap.gain.toFixed(2)));
+      const btn = el("button", null, "Swap");
+      btn.type = "button";
+      btn.addEventListener("click", onApply);
+      box.append(btn);
+      row.append(box);
+    }
+    return row;
+  }
+
+  function renderLive() {
+    const body = document.getElementById("livebody");
+    const summary = document.getElementById("livesummary");
+    if (!body || !summary) return;
+    const now = new Date();
+    body.replaceChildren();
+    summary.replaceChildren();
+
+    const positions = slotPositions();
+    let open = 0, shut = 0, totalGain = 0;
+
+    // Players. Suggestions are made in slot order and claim their candidate,
+    // so the set as a whole is one squad you could actually field.
+    const claimed = new Set();
+    const claimedClubs = new Map();
+    const entries = positions.map((pos, i) => {
+      const id = plan.picks[i];
+      const row = id ? POOL_BY_ID.get(id) : null;
+      const iso = row ? playerLock(row) : null;
+      const locked = isLocked(iso, now);
+      const swap = locked ? null : bestSwap(i, now, claimed, claimedClubs);
+      if (locked) shut++; else open++;
+      if (swap) {
+        totalGain += swap.gain;
+        claimed.add(swap.row.id);
+        claimedClubs.set(swap.row.club, (claimedClubs.get(swap.row.club) || 0) + 1);
+      }
+      return { i, pos, row, iso, locked, swap };
+    });
+    entries.sort((a, b) => {
+      if (a.locked !== b.locked) return a.locked ? 1 : -1;
+      if (!a.iso) return 1;
+      if (!b.iso) return -1;
+      return new Date(a.iso) - new Date(b.iso);
+    });
+
+    const claimedPicks = new Set();
+    const clubEntries = [0, 1].map((i) => {
+      const name = plan.clubs[i];
+      const club = name ? CLUB_BY_NAME.get(name) : null;
+      const iso = club ? club.kickoff : null;
+      const locked = isLocked(iso, now);
+      const swap = locked ? null : bestClubSwap(i, now, claimedPicks);
+      if (locked) shut++; else open++;
+      if (swap) {
+        totalGain += swap.gain;
+        claimedPicks.add(swap.club.name);
+      }
+      return { i, club, iso, locked, swap };
+    });
+
+    const stat = (cls, value, label) => {
+      const box = el("div", "stat " + cls);
+      box.append(el("b", null, value));
+      box.append(el("span", null, label));
+      return box;
+    };
+    summary.append(stat("open", String(open), "still changeable"));
+    summary.append(stat("shut", String(shut), "locked in"));
+    summary.append(stat("gain", totalGain > 0 ? "+" + totalGain.toFixed(2) : "0.00",
+      "available from swaps"));
+
+    body.append(el("div", "livehead", "Players"));
+    entries.forEach((e) => {
+      const when = e.locked
+        ? { text: "locked", ms: null }
+        : { text: untilLabel(e.iso, now),
+            ms: e.iso ? new Date(e.iso) - now : null };
+      body.append(liveRow({
+        label: e.pos,
+        name: e.row ? e.row.name : "empty",
+        sub: e.row ? e.row.club + "  \\u00b7  " + fixtureLabel(e.row) : "nobody picked",
+        when,
+        pts: e.row ? pointsFor(e.row) : 0,
+        locked: e.locked,
+        swap: e.swap ? { name: e.swap.row.name + "  (" + e.swap.row.club + ")",
+                         gain: e.swap.gain } : null,
+        onApply: () => {
+          if (!e.swap) return;
+          // Keep the armband on the slot rather than losing it silently.
+          if (plan.captain && plan.picks[e.i] === plan.captain) {
+            plan.captain = e.swap.row.id;
+          }
+          plan.picks[e.i] = e.swap.row.id;
+          renderPlanner();
+          renderLive();
+        },
+      }));
+    });
+
+    body.append(el("div", "livehead", "Clubs"));
+    clubEntries.forEach((e) => {
+      const when = e.locked
+        ? { text: "locked", ms: null }
+        : { text: untilLabel(e.iso, now),
+            ms: e.iso ? new Date(e.iso) - now : null };
+      body.append(liveRow({
+        label: "CLB",
+        name: e.club ? e.club.name : "empty",
+        sub: e.club
+          ? (e.club.away ? "at " : "vs ") + e.club.opp
+          : "no club picked",
+        when,
+        pts: e.club ? clubTotal(e.club) : 0,
+        locked: e.locked,
+        swap: e.swap ? { name: e.swap.club.name + "  (" +
+                               (e.swap.club.away ? "at " : "vs ") +
+                               e.swap.club.opp + ")",
+                         gain: e.swap.gain } : null,
+        onApply: () => {
+          if (!e.swap) return;
+          plan.clubs[e.i] = e.swap.club.name;
+          renderPlanner();
+          renderLive();
+        },
+      }));
+    });
+  }
+
   // Land on a filled pitch (the model's squad) with the players picker ready.
   syncPickerTabs();
   seedPlan();
 
   // View switching. Team Planner is the landing tab.
-  const VIEWS = ["planner", "players", "clubs", "history"];
+  const VIEWS = ["planner", "live", "players", "clubs", "history"];
   function showView(name) {
     VIEWS.forEach((key) => {
       const view = document.getElementById("view-" + key);
@@ -3634,9 +3947,20 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
   }
   VIEWS.forEach((name) => {
     const tab = document.getElementById("tab-" + name);
-    if (tab) tab.addEventListener("click", () => showView(name));
+    if (tab) tab.addEventListener("click", () => {
+      // Recompute on arrival: lock states move with the clock, and minutes
+      // set to 0 on the planner should be reflected the moment you look.
+      if (name === "live") renderLive();
+      showView(name);
+    });
   });
   showView("planner");
+
+  // Lock states are a function of the clock, so the view has to age on its
+  // own -- a player who was changeable when the page was opened is not one
+  // an hour later.
+  renderLive();
+  setInterval(renderLive, 30000);
 
   // Blind spots
   const blind = document.getElementById("blind");
@@ -3670,14 +3994,22 @@ def _smoke_test(page: Path) -> str | None:
 
     if shutil.which("node") is None:
         return None
-    checker = Path(__file__).resolve().parent / "check_page.js"
-    if not checker.exists():
-        return None
-    result = subprocess.run(
-        ["node", str(checker), str(page)],
-        capture_output=True, text=True, timeout=60,
-    )
-    return None if result.returncode == 0 else (result.stderr or "").strip()
+    here = Path(__file__).resolve().parent
+    # check_live.js runs at a frozen matchday moment, which is the only way to
+    # execute the locked branch of the Live view: on the day the page is built
+    # every player is still open, so a bug there would ship unseen.
+    for name in ("check_page.js", "check_live.js"):
+        checker = here / name
+        if not checker.exists():
+            continue
+        result = subprocess.run(
+            ["node", str(checker), str(page), str(DATA)],
+            capture_output=True, text=True, timeout=60,
+        )
+        if result.returncode != 0:
+            detail = (result.stderr or "").strip() or (result.stdout or "").strip()
+            return f"{name}: {detail}"
+    return None
 
 
 def main() -> int:

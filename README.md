@@ -93,6 +93,7 @@ One person should fetch live; everyone else replays. About 5 MB a season.
 | `python scripts/build_app.py` | Build `data/app.html` |
 | `node scripts/check_page.js` | Assert the built page's script runs |
 | `node scripts/check_planner.js` | Drive the planner and check its total |
+| `node scripts/check_live.js` | Drive the Live view at a frozen matchday |
 | `python scripts/build_match_history.py` | Reconstruct match data from snapshots |
 | `python scripts/plan_clubs.py --strength` | Plan club uses across the season |
 | `python -m pytest tests/ -q` | 228 tests |
