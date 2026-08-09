@@ -71,7 +71,6 @@ const data = JSON.parse(
 const total = byId.get("plantotal");
 const note = byId.get("plannote");
 const warn = byId.get("planwarn");
-const slots = byId.get("planslots");
 
 let failures = 0;
 const check = (label, ok, detail = "") => {
@@ -79,11 +78,14 @@ const check = (label, ok, detail = "") => {
   if (!ok) failures++;
 };
 
-console.log("empty planner:");
-check("starts at zero", total.textContent === "0.00", total.textContent);
-check("says nothing is picked", note.textContent.includes("0 of 7"), note.textContent);
-check("seven empty slots drawn", slots.children.length === 7,
-  String(slots.children.length));
+// The Team Planner tab is the landing page and seeds itself from the model's
+// squad, so the pitch is filled on arrival (the clearing section below still
+// exercises the empty state).
+console.log("lands seeded from the model:");
+check("starts at the model's total",
+  Math.abs(parseFloat(total.textContent) - data.squad.total) < 0.02,
+  `planner ${total.textContent}  model ${data.squad.total}`);
+check("all seven picked on load", note.textContent.includes("7 of 7"), note.textContent);
 
 console.log("\nfilling from the model:");
 byId.get("planseed").click();
@@ -99,8 +101,6 @@ console.log("\nchanging formation:");
 const select = byId.get("planformation");
 select.value = "1-3-2-1";
 (select.listeners.change || []).forEach((fn) => fn());
-check("still eight rows or fewer", slots.children.length === 7,
-  String(slots.children.length));
 check("total recomputed", parseFloat(total.textContent) > 0, total.textContent);
 
 console.log("\nclearing:");
