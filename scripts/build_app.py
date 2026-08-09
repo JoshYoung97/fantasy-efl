@@ -452,8 +452,10 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
   }
   .fx.double { background: var(--floodlight); color: var(--ink); }
 
-  .own.elite-up { color: var(--pitch); }
-  .own.elite-down { color: var(--clay); }
+  /* Where the top managers diverge from the field: backing a player the
+     field ignores, or avoiding one it loves. */
+  .elite-up { color: var(--pitch); font-weight: 700; }
+  .elite-down { color: var(--clay); font-weight: 700; }
 
   .tier {
     display: inline-flex;
@@ -1413,6 +1415,31 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
 
   const fmt = (n) => n.toFixed(2);
   const el = (t, c, x) => { const e = document.createElement(t); if (c) e.className = c; if (x !== undefined) e.textContent = x; return e; };
+
+  // Ownership among the top-ranked managers. Absent until a gameweek has
+  // locked and the squads have been collected, so the column only appears
+  // once there is a real sample -- an empty one would read as "the good
+  // managers avoid him" rather than "we cannot see yet".
+  const ELITE_ON = !!(DATA.elite && DATA.elite.usable);
+  //: Percentage points of divergence before a player is called a differential.
+  const ELITE_GAP = 10;
+
+  // The gap against overall ownership is the entire point of collecting it:
+  // a player on 8% overall and 40% among the top hundred is not a
+  // differential, whatever the headline number says.
+  function eliteCol() {
+    return {
+      key: "elite", label: "Elite%", align: "right",
+      value: (r) => (Number.isFinite(r.elite) ? r.elite : -1),
+      cell: (r) => (Number.isFinite(r.elite) ? r.elite.toFixed(1) : ""),
+      cellClass: (r) => {
+        if (!Number.isFinite(r.elite)) return "";
+        if (r.elite - r.own >= ELITE_GAP) return "elite-up";
+        if (r.own - r.elite >= ELITE_GAP) return "elite-down";
+        return "";
+      },
+    };
+  }
 
   // Fixture difficulty, straight from the market's price for the match.
   function tierChip(tier) {
@@ -2486,6 +2513,7 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
 
     cols.push({ key: "own", label: "Own%", align: "right",
       value: (r) => r.own, cell: (r) => r.own.toFixed(1) });
+    if (ELITE_ON) cols.push(eliteCol());
 
     // Position-specific scoring metrics only when a single position is shown.
     if (active !== "ALL") {
@@ -3291,6 +3319,7 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
         value: (r) => stateFor(r.id).xmins, cell: (r) => String(stateFor(r.id).xmins), shade: minsShade },
       { key: "own", label: "Own%", align: "right",
         value: (r) => r.own, cell: (r) => r.own.toFixed(1) },
+      ...(ELITE_ON ? [eliteCol()] : []),
       { key: "win", label: "Win", align: "right",
         value: (r) => oddsVal(playerWinProb(r)),
         cell: (r) => { const p = playerWinProb(r); return Number.isFinite(p) ? oddsStr(p) : ""; },
