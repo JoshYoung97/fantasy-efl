@@ -1,9 +1,12 @@
 """Export current projections to data/app_data.json for the web page.
 
-    python scripts/export_app_data.py
+    python scripts/export_app_data.py [--stored-odds]
 
-Costs 3 Odds API credits. Run before each gameweek deadline, then
-`build_app.py` to regenerate the page.
+Costs 3 Odds API credits, unless --stored-odds replays the most recently
+saved odds payload instead -- no key needed, and it's how a group works from
+the same numbers rather than everyone fetching an hour apart and getting
+different projections from identical code. Run before each gameweek
+deadline, then `build_app.py` to regenerate the page.
 """
 
 from __future__ import annotations
@@ -177,8 +180,9 @@ def _pool(gw, kickoffs, divisions: dict[int, str], elite=None) -> list[dict]:
 
 
 def main() -> int:
+    stored_odds = "--stored-odds" in sys.argv
     try:
-        gw = load_gameweek(ROOT)
+        gw = load_gameweek(ROOT, stored_odds=stored_odds)
     except RuntimeError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
