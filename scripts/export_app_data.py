@@ -280,7 +280,11 @@ def main() -> int:
                 "away": c.away,
                 "xp": round(c.expected_points, 2),
                 "win": round(c.p_win, 3),
+                "draw": round(c.p_draw, 3),
                 "cs": round(c.profile.p_clean_sheet, 3),
+                # Over 1.5 goals is the 2+ term; over 3.5 is the 4+ term.
+                "o15": round(c.profile.p_scores_2_plus, 3),
+                "o35": round(c.profile.p_scores_4_plus, 3),
                 "outlook": fixture_counts.get(squad_ids.get(c.club, -1), []),
                 "kickoff": kickoffs.get(c.club),
                 "tier": c.difficulty,
