@@ -1,46 +1,61 @@
-"""Converting anytime-goalscorer prices into a player's expected goals.
+"""Converting manually-entered player-prop prices into expected-points seeds.
 
-The market for a player scoring anytime prices something the season-totals
-feed cannot see: this player, this fixture, informed by whatever the book
-knows about form, fitness and tactical role. Kept manual rather than scraped
--- see the module's own reasoning below -- entries are typed in by hand from
-Oddschecker or a single book, one row per player per fixture.
+The market for a player scoring, assisting or hitting the target anytime
+prices something the season-totals feed cannot see: this player, this
+fixture, informed by whatever the book knows about form, fitness and
+tactical role. Kept manual rather than scraped -- see "What this
+deliberately does not attempt" below -- entries are typed in by hand from
+Oddschecker or a single book, one row per player per fixture, carrying
+whichever of the three markets were priced for them.
 
-The conversion, in three steps:
+All three markets -- Anytime Goalscorer, Player Assists Over 0.5, Player
+Shots On Target Over 0.5 -- share the same price structure (an implied
+probability of at least one occurrence), so the same conversion applies to
+all three:
 
-1. Poisson invert. `P(scores anytime) = 1 - e^-lambda`, so
-   `lambda = -ln(1 - p)`, the same Poisson family `goals.py` already uses for
-   clubs. `p` here is the raw, un-devigged implied probability.
+1. Poisson invert. `P(at least one) = 1 - e^-lambda`, so
+   `lambda = -ln(1 - p)`, the same Poisson family `goals.py` already uses
+   for clubs. `p` here is the raw, un-devigged implied probability.
 
-2. Reconcile against the team total. Anytime-scorer is not a partition --
-   two players can both score -- so the usual "make probabilities sum to 1"
-   de-vig does not apply. Instead, the correction *is* rescaling every
-   player's raw lambda so they sum to the team's own modelled expected goals
-   (from `goals.py`, already de-vigged from the match-odds market), minus a
-   small allowance for goals the anytime-scorer market cannot see at all:
-   own goals, credited to nobody's own price.
+2. Reconcile against a team total, for goals and assists only. Anytime
+   markets are not a partition -- two players can both score -- so the
+   usual "make probabilities sum to 1" de-vig does not apply. Instead, the
+   correction *is* rescaling every player's raw lambda so they sum to a
+   team total computed independently:
+     - goals: the team's own modelled expected goals (from `goals.py`),
+       minus a small allowance for goals the market cannot see at all --
+       own goals, credited to nobody's own price.
+     - assists: the same team expected-goals figure, scaled down by
+       `ASSIST_SHARE_OF_GOALS` -- not every goal is assisted (some are
+       penalties, own goals, or solo efforts).
+   Shots on target has no independent team-level target to reconcile
+   against (`goals.py` derives win/draw/clean-sheet/goals from the 1X2
+   market alone, not a shots market), so it is a straight, non-reconciled
+   read -- see `build_shots_on_target_seeds`.
 
-3. Rebase onto a per-90 figure. The anytime-scorer price already reflects
-   the market's own view of how long this player is likely to play -- it is
-   not a per-90 rate. `export_app_data.py`'s page multiplies every goals
-   figure by minutes/90 (see `pointsGivenMinutes` in `build_app.py`), so
-   feeding a whole-match figure straight in would discount it a second time.
-   Dividing by the same assumed minutes here cancels that out: the page
-   recovers exactly the reconciled figure when its own minutes control sits
-   at that assumption.
+3. Rebase onto a per-90 figure. The price already reflects the market's own
+   view of how long this player is likely to play -- it is not a per-90
+   rate. `export_app_data.py`'s page multiplies every rate by minutes/90
+   (see `pointsGivenMinutes` in `build_app.py`), so feeding a whole-match
+   figure straight in would discount it a second time. Dividing by the same
+   assumed minutes here cancels that out.
 
 What this deliberately does not attempt:
 
-- **Substitute-scored goals.** Only a problem if entries are limited to the
-  starting XI. Price the bench too (bookmakers usually do, once lineups are
-  out) and it is not a separate correction at all -- a substitute's own
-  anytime price already carries "comes on and scores".
-- **A precise own-goal rate.** The feed carries no own-goal field for any
-  player (checked directly against `players.json`'s fields), so there is
-  nothing to calibrate `OWN_GOAL_ALLOWANCE` against, the way `CARD_COST` was
-  calibrated from a real season. It is a placeholder external estimate,
-  flagged as such, worth revisiting if a source for real own-goal counts
-  ever turns up.
+- **Cards.** Oddschecker does have a "To Be Shown A Card" market, but its
+  price structure wasn't confirmed while building this (the section did not
+  render cleanly on inspection). Worth adding once actually verified rather
+  than guessed at.
+- **Substitute-scored goals/assists.** Only a problem if entries are limited
+  to the starting XI. Price the bench too (bookmakers usually do, once
+  lineups are out) and it is not a separate correction at all -- a
+  substitute's own price already carries "comes on and contributes".
+- **A precise own-goal rate or assist share.** The feed carries no own-goal
+  or assist-attribution field for any player (checked directly against
+  `players.json`'s fields), so there is nothing to calibrate
+  `OWN_GOAL_ALLOWANCE` or `ASSIST_SHARE_OF_GOALS` against, the way
+  `CARD_COST` was calibrated from a real season. Both are placeholder
+  external estimates, flagged as such.
 - **Automated collection.** Oddschecker and bet365 both actively resist
   scraping (JS-rendered tables behind bot detection, and their terms
   restrict it), and the volume that actually matters -- a squad plus a
@@ -53,21 +68,23 @@ theoretical one -- found it by hand while testing this module. Reconciliation
 attributes the WHOLE team target across however many players are priced, so
 one entry for a lone favourite striker makes him absorb his entire team's
 worth of expected goals (one real test case: a single midfielder came out at
-1.87 expected goals per 90 and 16.9 points for one match). `build_seeds`
-still produces a number below `MIN_PRICED_PER_CLUB` -- a real, incomplete
-price is still better than the model's own guess for the players it does
-cover -- but flags it via `SeedResult.sparse_clubs`, and
+1.87 expected goals per 90 and 16.9 points for one match). `build_goal_seeds`
+and `build_assist_seeds` still produce a number below `MIN_PRICED_PER_CLUB`
+-- a real, incomplete price is still better than the model's own guess for
+the players it does cover -- but flag it via `SeedResult.sparse_clubs`, and
 `export_app_data.py` prints a warning for it. Price most of a team's
 attacking threat, not just one player, or trust the warning when you cannot.
+Shots on target has no reconciliation step, so this trap does not apply to
+it.
 
 Only entries with a *confirmed* lineup are used to seed the model. A
-predicted lineup's anytime-scorer price is blended: it reflects both this
-player's rate if he plays and the market's own uncertainty about whether he
-starts at all, and there is no way to cleanly separate those out of a single
-price. `player_model.py`'s `MinutesModel` already owns "probability of
-playing" -- feeding a blended price into the goals rate would double count
-that uncertainty, once from the market price and again from the model's own
-estimate. Predicted-but-unconfirmed entries are still matched and reported
+predicted lineup's price is blended: it reflects both this player's rate if
+he plays and the market's own uncertainty about whether he starts at all,
+and there is no way to cleanly separate those out of a single price.
+`player_model.py`'s `MinutesModel` already owns "probability of playing" --
+feeding a blended price into a rate would double count that uncertainty,
+once from the market price and again from the model's own estimate.
+Predicted-but-unconfirmed entries are still matched and reported
 (`PlayerMatch.entry.confirmed` says which), so a predicted lineup is visible
 without being trusted as a clean rate.
 """
@@ -88,10 +105,17 @@ from .player_model import MINUTES_IF_LONG, MINUTES_IF_SHORT
 #: because nothing in the feed can measure it against.
 OWN_GOAL_ALLOWANCE = 0.03
 
-#: Below this an anytime-scorer price is treated as unpriced. A long-odds
-#: line on a fringe bench player is noisy, and division by (1 - p) blows up
-#: as p approaches 1 -- not a real risk here, but 1.01 is also just not a
-#: price worth trusting to two decimal places either way.
+#: Share of a team's goals that are credited to an assist -- the rest are
+#: penalties, own goals (the opponent's, not this team's), or unassisted
+#: individual efforts. An external, unmeasured estimate, same basis as
+#: OWN_GOAL_ALLOWANCE -- there is no assist field in the feed to calibrate
+#: against.
+ASSIST_SHARE_OF_GOALS = 0.65
+
+#: Below this a price is treated as unpriced. A long-odds line on a fringe
+#: bench player is noisy, and division by (1 - p) blows up as p approaches 1
+#: -- not a real risk here, but 1.01 is also just not a price worth trusting
+#: to two decimal places either way.
 MIN_ODDS = 1.01
 
 #: Below this the best name match is treated as no match at all, and above
@@ -100,8 +124,8 @@ MIN_ODDS = 1.01
 MIN_SCORE = 0.72
 AMBIGUITY_MARGIN = 0.08
 
-#: Below this many priced players for one club, reconciliation is flagged as
-#: sparse rather than trusted quietly.
+#: Below this many priced players for one club, reconciliation (goals or
+#: assists) is flagged as sparse rather than trusted quietly.
 #:
 #: Reconciliation attributes the ENTIRE team target across however many
 #: players are priced -- correct given what it is told, but if that is one
@@ -116,37 +140,48 @@ AMBIGUITY_MARGIN = 0.08
 MIN_PRICED_PER_CLUB = 4
 
 CSV_FIELDS = (
-    "player", "club", "anytime_odds", "bookmaker",
-    "lineup_status", "confirmed", "captured_at",
+    "player", "club", "lineup_status", "confirmed", "captured_at", "bookmaker",
+    "goal_odds", "assist_odds", "sot_odds",
 )
 
 
 @dataclass(frozen=True)
 class ScorerEntry:
-    """One manually-entered anytime-goalscorer price.
+    """One manually-entered player's prices for one fixture.
 
     `player` and `club` are written however the odds source spells them --
     matching against the roster is `match_players`'s job, not the entry's.
-    `anytime_odds` is the raw decimal price, not a probability: the
-    conversion belongs in code, run consistently, not redone by hand for
+    Each `*_odds` field is the raw decimal price for that market, or `None`
+    if that market wasn't priced for this player: not every market covers
+    every player (bench options often miss the shots-on-target line, for
+    instance), and a row only needs whichever prices were actually found.
+    The conversion belongs in code, run consistently, not redone by hand for
     every player.
     """
 
     player: str
     club: str
-    anytime_odds: float
-    bookmaker: str
     lineup_status: str  # "start" | "bench" | "out"
     confirmed: bool
     captured_at: str = ""
+    bookmaker: str = ""
+    goal_odds: float | None = None
+    assist_odds: float | None = None
+    sot_odds: float | None = None
+
+
+def _parse_odds(raw: str) -> float | None:
+    raw = raw.strip()
+    return float(raw) if raw else None
 
 
 def load_entries(path: Path) -> list[ScorerEntry]:
-    """Read a CSV of manually-entered anytime-scorer prices.
+    """Read a CSV of manually-entered player prices.
 
-    Columns: player, club, anytime_odds, bookmaker, lineup_status, confirmed,
-    captured_at. `confirmed` reads any of true/1/yes (case-insensitive) as
-    true, everything else as false.
+    Columns: player, club, lineup_status, confirmed, captured_at, bookmaker,
+    goal_odds, assist_odds, sot_odds. The three `*_odds` columns may be left
+    blank where that market wasn't priced for a player. `confirmed` reads
+    any of true/1/yes (case-insensitive) as true, everything else as false.
     """
     entries = []
     with Path(path).open(newline="", encoding="utf-8") as handle:
@@ -154,22 +189,26 @@ def load_entries(path: Path) -> list[ScorerEntry]:
             entries.append(ScorerEntry(
                 player=row["player"].strip(),
                 club=row["club"].strip(),
-                anytime_odds=float(row["anytime_odds"]),
-                bookmaker=row.get("bookmaker", "").strip(),
                 lineup_status=row["lineup_status"].strip().lower(),
                 confirmed=row.get("confirmed", "").strip().lower() in ("true", "1", "yes"),
                 captured_at=row.get("captured_at", "").strip(),
+                bookmaker=row.get("bookmaker", "").strip(),
+                goal_odds=_parse_odds(row.get("goal_odds", "")),
+                assist_odds=_parse_odds(row.get("assist_odds", "")),
+                sot_odds=_parse_odds(row.get("sot_odds", "")),
             ))
     return entries
 
 
-def implied_goal_rate(decimal_odds: float) -> float:
-    """The raw (not yet reconciled) Poisson lambda behind an anytime price.
+def implied_rate(decimal_odds: float) -> float:
+    """The raw (not yet reconciled) Poisson lambda behind an "at least one" price.
 
-    `P(scores anytime) = 1 - e^-lambda`, so `lambda = -ln(1 - p)` for the raw
-    implied probability `p = 1 / decimal_odds`. Still carries whatever
-    overround the book applies -- `reconcile_team` is the correction, not
-    this.
+    `P(at least one) = 1 - e^-lambda`, so `lambda = -ln(1 - p)` for the raw
+    implied probability `p = 1 / decimal_odds`. Applies identically to
+    anytime-goalscorer, assists-over-0.5 and shots-on-target-over-0.5 --
+    all three are "at least one occurrence" prices. Still carries whatever
+    overround the book applies; `reconcile_team` is the correction for
+    goals and assists, not this.
     """
     if decimal_odds < MIN_ODDS:
         raise ValueError(f"odds must be >= {MIN_ODDS}, got {decimal_odds}")
@@ -177,43 +216,38 @@ def implied_goal_rate(decimal_odds: float) -> float:
     return -math.log1p(-p)
 
 
-def reconcile_team(
-    raw_lambdas: dict[int, float], team_expected_goals: float,
-    own_goal_allowance: float = OWN_GOAL_ALLOWANCE,
-) -> dict[int, float]:
-    """Rescale raw per-player lambdas to sum to the team's modelled total.
+def reconcile_team(raw_lambdas: dict[int, float], target_total: float) -> dict[int, float]:
+    """Rescale raw per-player lambdas to sum to an independently-known total.
 
-    Anytime-scorer prices are not a partition (two players can both score),
-    so there is no "probabilities sum to 1" de-vig to apply. This rescaling
-    *is* the de-vig here: the single correction factor that makes
-    `sum(lambda)` agree with a total computed independently, from the
-    market-odds solve in `goals.py` rather than from these prices at all --
+    Anytime-style prices are not a partition (two players can both score or
+    both assist), so there is no "probabilities sum to 1" de-vig to apply.
+    This rescaling *is* the de-vig here: the single correction factor that
+    makes `sum(lambda)` agree with a total computed independently -- from
+    the market-odds solve in `goals.py`, not from these prices at all --
     the same idea as Shin/proportional de-vigging in `odds.py`, just against
     a different, external target.
 
-    `team_expected_goals` is the team's full expected goals for the match;
-    `own_goal_allowance` is subtracted before rescaling, since that portion
-    is credited to nobody in `raw_lambdas`.
+    `target_total` should already have any allowance (own goals, the
+    assist share of goals) applied -- this function just rescales to meet
+    whatever total it is given.
     """
-    target = max(team_expected_goals - own_goal_allowance, 0.0)
     total_raw = sum(raw_lambdas.values())
     if total_raw <= 0:
         return dict(raw_lambdas)
-    factor = target / total_raw
+    factor = max(target_total, 0.0) / total_raw
     return {player_id: lam * factor for player_id, lam in raw_lambdas.items()}
 
 
 def seed_rate(reconciled_lambda: float, lineup_status: str) -> float:
     """A reconciled match-total lambda, rebased onto a per-90 figure.
 
-    The anytime-scorer price already reflects the market's own view of how
-    long this player plays -- it is a whole-match figure, not a per-90 rate.
-    The page multiplies every goals figure by minutes/90 (see
-    `pointsGivenMinutes` in `build_app.py`), so dividing by that same assumed
-    minutes here cancels the scaling out: the page recovers exactly
-    `reconciled_lambda` when its own minutes control sits at this
-    assumption. Skipping this step is the double-discount bug this module
-    exists to avoid.
+    The price already reflects the market's own view of how long this
+    player plays -- it is a whole-match figure, not a per-90 rate. The page
+    multiplies every rate by minutes/90 (see `pointsGivenMinutes` in
+    `build_app.py`), so dividing by that same assumed minutes here cancels
+    the scaling out: the page recovers exactly `reconciled_lambda` when its
+    own minutes control sits at this assumption. Skipping this step is the
+    double-discount bug this module exists to avoid.
 
     Uses the model's own MINUTES_IF_LONG/MINUTES_IF_SHORT so a market-derived
     seed and the model's own estimate agree on what "a starter" means.
@@ -296,11 +330,11 @@ def match_players(entries: list[ScorerEntry], roster: list[dict]) -> list[Player
 
 @dataclass
 class SeedResult:
-    """What build_seeds produced, and which clubs it should not be trusted for.
+    """What a build_*_seeds call produced, and which clubs it should not be trusted for.
 
-    Kept separate from the seeds themselves so build_seeds stays pure --
-    reporting a warning is the caller's job (export_app_data.py prints one),
-    not this function's.
+    Kept separate from the seeds themselves so the build functions stay
+    pure -- reporting a warning is the caller's job (export_app_data.py
+    prints one), not this one's.
     """
 
     seeds: dict[int, float]
@@ -310,32 +344,19 @@ class SeedResult:
     sparse_clubs: dict[str, int]
 
 
-def build_seeds(
-    matches: list[PlayerMatch], team_expected_goals: dict[str, float],
+def _build_reconciled_seeds(
+    matches: list[PlayerMatch], odds_field: str, team_targets: dict[str, float],
 ) -> SeedResult:
-    """Confirmed, matched, unambiguous entries -> per-player goals90 seeds.
+    """Shared machinery behind build_goal_seeds and build_assist_seeds.
 
-    Reconciliation happens per club, since the target is a club's total
-    expected goals for its own fixture. `team_expected_goals` is keyed by
-    club name (the same name entries carry) and should already be that
-    club's expected goals from `goals.py` for the relevant fixture -- one
-    entry's job is to price a player, not to know the match odds.
-
-    Silently drops anything unusable rather than raising: unconfirmed
-    lineups (the blended-price problem the module docstring explains),
-    unmatched or ambiguous names, and clubs with no expected-goals target
-    supplied. A caller that wants to know what got dropped should inspect
-    `matches` directly -- `PlayerMatch.player_id` and `.ambiguous` say why.
-
-    Does NOT drop a club for being sparsely priced (see MIN_PRICED_PER_CLUB)
-    -- a real but incomplete price is still better than the model's own
-    guess for the players it does cover, as long as whoever reads the result
-    knows to be suspicious of it. That is what `SeedResult.sparse_clubs` is
-    for.
+    `odds_field` is which of ScorerEntry's `*_odds` attributes to read;
+    `team_targets` is keyed by club name and should already have any
+    allowance (own goals, assist share) applied.
     """
     usable = [
         m for m in matches
         if m.entry.confirmed and m.player_id is not None and not m.ambiguous
+        and getattr(m.entry, odds_field) is not None
     ]
 
     by_club: dict[str, list[PlayerMatch]] = {}
@@ -345,27 +366,81 @@ def build_seeds(
     seeds: dict[int, float] = {}
     sparse_clubs: dict[str, int] = {}
     for club, club_matches in by_club.items():
-        target = team_expected_goals.get(club)
+        target = team_targets.get(club)
         if target is None:
             continue
         if len(club_matches) < MIN_PRICED_PER_CLUB:
             sparse_clubs[club] = len(club_matches)
-        raw = {m.player_id: implied_goal_rate(m.entry.anytime_odds) for m in club_matches}
+        raw = {m.player_id: implied_rate(getattr(m.entry, odds_field)) for m in club_matches}
         reconciled = reconcile_team(raw, target)
         for m in club_matches:
             seeds[m.player_id] = seed_rate(reconciled[m.player_id], m.entry.lineup_status)
     return SeedResult(seeds=seeds, sparse_clubs=sparse_clubs)
 
 
-def apply_seed(rates, goals90: float):
-    """A PlayerRates with `goals` replaced by a market-derived seed.
+def build_goal_seeds(
+    matches: list[PlayerMatch], team_expected_goals: dict[str, float],
+) -> SeedResult:
+    """Confirmed, matched, unambiguous entries -> per-player goals90 seeds.
+
+    `team_expected_goals` is keyed by club name and should be that club's
+    expected goals from `goals.py` for the relevant fixture -- one entry's
+    job is to price a player, not to know the match odds. OWN_GOAL_ALLOWANCE
+    is subtracted here before reconciling.
+
+    Silently drops anything unusable rather than raising: unconfirmed
+    lineups, unmatched or ambiguous names, players with no goal_odds priced,
+    and clubs with no expected-goals target supplied.
+    """
+    targets = {club: max(g - OWN_GOAL_ALLOWANCE, 0.0) for club, g in team_expected_goals.items()}
+    return _build_reconciled_seeds(matches, "goal_odds", targets)
+
+
+def build_assist_seeds(
+    matches: list[PlayerMatch], team_expected_goals: dict[str, float],
+) -> SeedResult:
+    """Confirmed, matched, unambiguous entries -> per-player assists90 seeds.
+
+    Same shape as build_goal_seeds, reconciled against ASSIST_SHARE_OF_GOALS
+    of the same team-expected-goals figure rather than the full total -- not
+    every goal has an assist.
+    """
+    targets = {club: g * ASSIST_SHARE_OF_GOALS for club, g in team_expected_goals.items()}
+    return _build_reconciled_seeds(matches, "assist_odds", targets)
+
+
+def build_shots_on_target_seeds(matches: list[PlayerMatch]) -> dict[int, float]:
+    """Confirmed, matched, unambiguous entries -> per-player shotsOnTarget90 seeds.
+
+    Unlike goals and assists, there is no independent team-level "expected
+    shots on target" figure to reconcile against -- `goals.py` derives win,
+    draw, clean-sheet and goals from the 1X2 market alone, not a shots
+    market -- so this is a straight, non-reconciled read of each player's
+    own price. The book's overround stays in. Good enough for ranking who is
+    likely to register a shot on target; not meant to be read as a precise
+    rate the way the goal and assist seeds are.
+    """
+    seeds: dict[int, float] = {}
+    for m in matches:
+        if not (m.entry.confirmed and m.player_id is not None and not m.ambiguous):
+            continue
+        if m.entry.sot_odds is None:
+            continue
+        raw = implied_rate(m.entry.sot_odds)
+        seeds[m.player_id] = seed_rate(raw, m.entry.lineup_status)
+    return seeds
+
+
+def apply_seed(rates, field: str, value: float):
+    """A PlayerRates with one field replaced by a market-derived seed.
 
     `rates` is fixture-adjusted per-90 already (see `player_rates` in
-    `player_model.py`), which is exactly the basis `goals90` from
-    `build_seeds` is on -- so this is a plain substitution, not a rescale.
-    Returns a new object; `rates` is frozen and unmodified, so
-    `expected_player_points` on the result reflects the seed exactly the way
-    it would any other rate, keeping the page's own "recompute from the
-    rates" invariant intact.
+    `player_model.py`), which is exactly the basis a seed from this module
+    is on -- so this is a plain substitution, not a rescale. `field` is a
+    PlayerRates attribute name (`"goals"`, `"assists"` or
+    `"shots_on_target"`). Returns a new object; `rates` is frozen and
+    unmodified, so `expected_player_points` on the result reflects the seed
+    exactly the way it would any other rate, keeping the page's own
+    "recompute from the rates" invariant intact.
     """
-    return replace(rates, goals=goals90)
+    return replace(rates, **{field: value})
