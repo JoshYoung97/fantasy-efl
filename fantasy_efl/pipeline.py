@@ -96,6 +96,43 @@ def _round_complete(rnd: dict) -> bool:
     return bool(games) and all(_is_played(g) for g in games)
 
 
+def _round_pairs(rnd: dict, squads: dict[int, str]) -> set[tuple[str, str]]:
+    """Every (club, opponent) ordered pair the round actually schedules.
+
+    Both directions, so a projection can be checked from either side.
+    """
+    pairs: set[tuple[str, str]] = set()
+    for game in rnd.get("games") or []:
+        home = squads.get(game.get("homeId"))
+        away = squads.get(game.get("awayId"))
+        if home and away:
+            pairs.add((home, away))
+            pairs.add((away, home))
+    return pairs
+
+
+def _only_this_round(
+    clubs: list[ClubProjection], pairs: set[tuple[str, str]]
+) -> list[ClubProjection]:
+    """Drop projections for fixtures that belong to a later round.
+
+    Club projections are built from every event the odds feed returns, and
+    bookmakers price a week or more ahead. Before a round starts that is
+    harmless, because only that round is listed. Once a round is under way the
+    next one is already priced, and those matches would otherwise be counted as
+    extra fixtures in the current gameweek -- on the first live gameweek 20 of
+    66 clubs gained a phantom double and their projections roughly doubled.
+
+    Matched on the pair rather than the club, so a genuine double keeps both of
+    its fixtures while a next-round match is dropped. An empty `pairs` means
+    the round carries no fixtures to check against, and everything is kept
+    rather than silently discarding the whole gameweek.
+    """
+    if not pairs:
+        return clubs
+    return [c for c in clubs if (c.club, c.opponent) in pairs]
+
+
 def _combine(name: str, group: list[ClubProjection], scheduled: int) -> ClubProjection:
     """Fold a club's fixtures into one entry for the gameweek.
 
@@ -324,6 +361,9 @@ def load_gameweek(
                 name = squads.get(game[side])
                 if name:
                     scheduled[name] = scheduled.get(name, 0) + 1
+
+    if upcoming:
+        clubs = _only_this_round(clubs, _round_pairs(upcoming, squads))
 
     # Per-fixture projections, grouped by club. Mapping straight into a dict
     # keyed on club name would keep only the last fixture and silently drop
