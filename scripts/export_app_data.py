@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import sys
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -223,6 +224,42 @@ def _pool(gw, kickoffs, divisions: dict[int, str], elite=None, scorer_seeds=None
     return rows
 
 
+def _reseed_players(gw, scorer_seeds: dict) -> list:
+    """Re-project every player with the market's own scoring rates applied.
+
+    `_pool` already applies the seeds when building the page rows; this puts
+    the same numbers in front of the optimiser, so the squad it picks and the
+    rows the page shows are the same projection. Players with no priced entry
+    are returned untouched.
+    """
+    reseeded = []
+    for projection in gw.players:
+        player = gw.raw_by_id.get(projection.id)
+        fixtures = gw.fixtures_by_club.get(player["squadId"]) if player else None
+        if not player or not fixtures:
+            reseeded.append(projection)
+            continue
+        seeds = {
+            SEED_FIELDS[key]: values[projection.id]
+            for key, values in scorer_seeds.items()
+            if projection.id in values
+        }
+        if not seeds:
+            reseeded.append(projection)
+            continue
+        total = 0.0
+        for fixture in fixtures:
+            rates = player_rates(
+                player, fixture, gw.priors,
+                games_played=gw.games_played.get(player["squadId"], 0),
+            )
+            for field, value in seeds.items():
+                rates = apply_seed(rates, field, value)
+            total += expected_player_points(rates)
+        reseeded.append(replace(projection, expected_points=total))
+    return reseeded
+
+
 def main() -> int:
     stored_odds = "--stored-odds" in sys.argv
     ags_all = "--ags-all" in sys.argv
@@ -230,11 +267,6 @@ def main() -> int:
         gw = load_gameweek(ROOT, stored_odds=stored_odds)
     except RuntimeError as exc:
         print(f"error: {exc}", file=sys.stderr)
-        return 1
-
-    squad = optimise_gameweek(gw.players, gw.clubs)
-    if squad is None:
-        print("no legal squad could be built", file=sys.stderr)
         return 1
 
     snapshot = list_snapshots()[-1]
@@ -336,6 +368,22 @@ def main() -> int:
                 print(f"  WARNING: only {count} priced player(s) for {club} ({stat}) -- "
                       f"reconciliation attributes the whole team's total across just them, "
                       f"which overstates their share. Price more of the likely contributors.")
+
+    # Optimise on the seeded numbers, not the raw ones.
+    #
+    # The seeds were previously applied only to the exported pool, after the
+    # squad had already been chosen from unseeded projections. The page then
+    # showed a headline total that disagreed with the sum of its own rows by
+    # 5.79 points, and recommended a squad picked on numbers it was no longer
+    # displaying. check_planner.js catches the arithmetic, but the wrong squad
+    # would have looked entirely reasonable.
+    if scorer_seeds:
+        gw = replace(gw, players=_reseed_players(gw, scorer_seeds))
+
+    squad = optimise_gameweek(gw.players, gw.clubs)
+    if squad is None:
+        print("no legal squad could be built", file=sys.stderr)
+        return 1
 
     pool = _pool(gw, kickoffs, divisions, elite, scorer_seeds)
 
