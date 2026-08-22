@@ -89,7 +89,7 @@ One person should fetch live; everyone else replays. About 5 MB a season.
 | `python -m fantasy_efl.snapshot` | Capture the EFL feeds |
 | `python scripts/optimal_team.py` | Best legal squad |
 | `python scripts/player_projections.py` | Ranked players by position |
-| `python scripts/export_app_data.py` | Data for the web page |
+| `python scripts/export_app_data.py [--stored-odds]` | Data for the web page (`--stored-odds`: no key needed, replays the last saved odds) |
 | `python scripts/build_app.py` | Build `data/app.html` |
 | `node scripts/check_page.js` | Assert the built page's script runs |
 | `node scripts/check_planner.js` | Drive the planner and check its total |

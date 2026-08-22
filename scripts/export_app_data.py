@@ -1,9 +1,12 @@
 """Export current projections to data/app_data.json for the web page.
 
-    python scripts/export_app_data.py
+    python scripts/export_app_data.py [--stored-odds]
 
-Costs 3 Odds API credits. Run before each gameweek deadline, then
-`build_app.py` to regenerate the page.
+Costs 3 Odds API credits, unless --stored-odds replays the most recently
+saved odds payload instead -- no key needed, and it's how a group works from
+the same numbers rather than everyone fetching an hour apart and getting
+different projections from identical code. Run before each gameweek
+deadline, then `build_app.py` to regenerate the page.
 """
 
 from __future__ import annotations
@@ -20,6 +23,14 @@ from fantasy_efl.expected import (  # noqa: E402
     DEFAULT_DISPERSION,
     expected_player_points,
 )
+from fantasy_efl.goalscorer_odds import (  # noqa: E402
+    apply_seed,
+    build_assist_seeds,
+    build_goal_seeds,
+    build_shots_on_target_seeds,
+    load_entries,
+    match_players,
+)
 from fantasy_efl.optimiser import optimise_gameweek  # noqa: E402
 from fantasy_efl.pipeline import load_gameweek  # noqa: E402
 from fantasy_efl.player_model import player_rates  # noqa: E402
@@ -31,6 +42,16 @@ from fantasy_efl.snapshot import (  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 OUTPUT = ROOT / "data" / "app_data.json"
+
+#: Manually-entered player-prop prices (goals, assists, shots on target),
+#: read if present. Absent by default -- this is a manual, occasional input
+#: (see goalscorer_odds.py for why it stays that way), not something every
+#: run needs.
+SCORER_ODDS = ROOT / "data" / "scorer_odds.csv"
+
+#: PlayerRates field name for each seed, keyed by the same short names used
+#: in the pool row's `seeds` dict and log output.
+SEED_FIELDS = {"goals": "goals", "assists": "assists", "sot": "shots_on_target"}
 
 #: Ownership below which an unrateable player is not worth flagging.
 BLIND_SPOT_OWNERSHIP = 5.0
@@ -115,7 +136,7 @@ def _rate_values(rates) -> list[float]:
     return out
 
 
-def _pool(gw, kickoffs, divisions: dict[int, str], elite=None) -> list[dict]:
+def _pool(gw, kickoffs, divisions: dict[int, str], elite=None, scorer_seeds=None) -> list[dict]:
     """Every selectable player, with fixture-adjusted rates for each fixture.
 
     `gw.players` is restricted to status == "playing" because the optimiser
@@ -129,7 +150,17 @@ def _pool(gw, kickoffs, divisions: dict[int, str], elite=None) -> list[dict]:
     rate set, so a club playing twice in the gameweek is represented
     completely: the page sums across a player's fixtures the same way
     `project_player` does.
+
+    `scorer_seeds` is {"goals": {player_id: goals90}, "assists": {...},
+    "sot": {...}}, from build_goal_seeds/build_assist_seeds/
+    build_shots_on_target_seeds in goalscorer_odds.py -- each replaces the
+    model's own rate for that one stat where a confirmed, matched price
+    exists, independently of the other two. Applied to every fixture a
+    player has this gameweek alike -- a real simplification for the rare
+    case of a double gameweek priced from a single-fixture entry, on the
+    same "loose is fine here" basis as the rest of that module.
     """
+    scorer_seeds = scorer_seeds or {}
     rows = []
     for player in gw.raw_by_id.values():
         if player.get("status") == "eliminated":
@@ -139,21 +170,24 @@ def _pool(gw, kickoffs, divisions: dict[int, str], elite=None) -> list[dict]:
             continue
 
         games_played = gw.games_played.get(player["squadId"], 0)
-        fixtures = [
-            {
+        player_seeds = {
+            SEED_FIELDS[key]: seeds[player["id"]]
+            for key, seeds in scorer_seeds.items()
+            if player["id"] in seeds
+        }
+        fixtures = []
+        for f in club_fixtures:
+            rates = player_rates(player, f, gw.priors, games_played=games_played)
+            for field, value in player_seeds.items():
+                rates = apply_seed(rates, field, value)
+            fixtures.append({
                 "opp": f.opponent,
                 "away": f.away,
                 "kickoff": kickoffs.get(f.club),
                 "tier": f.difficulty,
-                "xp": _rate_fields(
-                    player_rates(player, f, gw.priors, games_played=games_played)
-                )["xp"],
-                "r": _rate_values(
-                    player_rates(player, f, gw.priors, games_played=games_played)
-                ),
-            }
-            for f in club_fixtures
-        ]
+                "xp": _rate_fields(rates)["xp"],
+                "r": _rate_values(rates),
+            })
 
         rows.append({
             "id": player["id"],
@@ -181,8 +215,9 @@ def _pool(gw, kickoffs, divisions: dict[int, str], elite=None) -> list[dict]:
 
 
 def main() -> int:
+    stored_odds = "--stored-odds" in sys.argv
     try:
-        gw = load_gameweek(ROOT)
+        gw = load_gameweek(ROOT, stored_odds=stored_odds)
     except RuntimeError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -246,7 +281,39 @@ def main() -> int:
                 kickoffs[name] = game["date"]
 
     elite = load_elite()
-    pool = _pool(gw, kickoffs, divisions, elite)
+
+    scorer_seeds = {}
+    if SCORER_ODDS.exists():
+        roster = [
+            {"id": p["id"], "displayName": p["displayName"], "club": squads.get(p["squadId"], "")}
+            for p in gw.raw_by_id.values()
+        ]
+        entries = load_entries(SCORER_ODDS)
+        matches = match_players(entries, roster)
+        team_expected_goals = {c.club: c.profile.scored_rate for c in gw.clubs}
+
+        goal_result = build_goal_seeds(matches, team_expected_goals)
+        assist_result = build_assist_seeds(matches, team_expected_goals)
+        sot_seeds = build_shots_on_target_seeds(matches)
+        scorer_seeds = {"goals": goal_result.seeds, "assists": assist_result.seeds, "sot": sot_seeds}
+
+        unusable = [m for m in matches if m.player_id is None or m.ambiguous]
+        if unusable:
+            print(f"  {len(unusable)} of {len(entries)} scorer-odds entries unmatched or "
+                  f"ambiguous -- see goalscorer_odds.match_players")
+        unconfirmed = [m for m in matches if m.player_id is not None and not m.ambiguous and not m.entry.confirmed]
+        if unconfirmed:
+            print(f"  {len(unconfirmed)} matched entries not yet confirmed -- predicted lineups "
+                  f"aren't used to seed the model (see goalscorer_odds.py)")
+        print(f"  seeded: {len(goal_result.seeds)} goals, {len(assist_result.seeds)} assists, "
+              f"{len(sot_seeds)} shots on target")
+        for stat, result in (("goals", goal_result), ("assists", assist_result)):
+            for club, count in result.sparse_clubs.items():
+                print(f"  WARNING: only {count} priced player(s) for {club} ({stat}) -- "
+                      f"reconciliation attributes the whole team's total across just them, "
+                      f"which overstates their share. Price more of the likely contributors.")
+
+    pool = _pool(gw, kickoffs, divisions, elite, scorer_seeds)
 
     # Highly-owned players the model cannot rate -- the gap worth knowing about.
     blind = sorted(
