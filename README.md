@@ -96,7 +96,7 @@ One person should fetch live; everyone else replays. About 5 MB a season.
 | `node scripts/check_live.js` | Drive the Live view at a frozen matchday |
 | `python scripts/build_match_history.py` | Reconstruct match data from snapshots |
 | `python scripts/plan_clubs.py --strength` | Plan club uses across the season |
-| `python -m pytest tests/ -q` | 228 tests |
+| `python -m pytest tests/ -q` | 294 tests |
 
 `optimal_team.py` takes:
 
