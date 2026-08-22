@@ -16,6 +16,7 @@ from .goals import GoalProfile, match_probabilities
 from .fpl_backfill import FplError, apply_backfill, fetch_fpl_players, match_keepers
 from .oddsapi import fetch_all_efl_raw, parse_fixtures
 from .player_model import (
+    SEASON_GAMES,
     PlayerProjection,
     build_priors,
     expected_minutes,
@@ -94,6 +95,121 @@ def _round_complete(rnd: dict) -> bool:
     """Whether every fixture in a round has been played."""
     games = rnd.get("games") or []
     return bool(games) and all(_is_played(g) for g in games)
+
+
+#: Counting stats that accumulate through a season and reset with it. Every
+#: one of these feeds a scoring rate; the rest of a player record (ownership,
+#: status, shirt number) is current-state and must not be added up.
+CARRIED_STATS = (
+    "appearances", "goalsScored", "assists", "cleanSheets", "saves",
+    "clearances", "blocks", "tackles", "interceptions", "keyPasses",
+    "shotsOnTarget",
+)
+
+
+def _appearance_total(players: list[dict]) -> int:
+    return sum(p.get("appearances") or 0 for p in players)
+
+
+#: How far total appearances must fall before a drop is read as a new season
+#: rather than a bad capture. A real rollover takes every total to zero, so the
+#: fall is near-total; requiring at least half guards against a truncated or
+#: partially-written snapshot being mistaken for one, which would double-count
+#: every stat it did contain.
+ROLLOVER_RATIO = 0.5
+
+
+def _find_season_baseline(snapshots: list, current: list[dict], load=None):
+    """The last snapshot taken before the feed rolled over to a new season.
+
+    Season totals only ever grow within a season, so a *fall* in total
+    appearances is evidence that the feed has reset. Walking back from the
+    newest snapshot, the first one holding substantially more appearances than
+    the current feed is the last view of the previous season.
+
+    Returns None when no reset has happened, which is every run until the day
+    one does.
+    """
+    load = load or (lambda s: load_snapshot(s, "players"))
+    now = _appearance_total(current)
+    for snapshot in reversed(snapshots[:-1]):
+        previous = load(snapshot)
+        if _appearance_total(previous) * ROLLOVER_RATIO > now:
+            return snapshot, previous
+    return None
+
+
+def _merge_history(current: list[dict], previous: list[dict]) -> tuple[list[dict], int]:
+    """Add the previous season's totals back onto a reset feed.
+
+    The EFL feed zeroes every counting stat when a new season starts. Taken at
+    face value that erases the entire evidence base: on the morning of the
+    2026/27 opener every one of 3,453 players read as having no record, so the
+    model fell back to position priors for all of them and a 6.61-point
+    midfielder projected 1.96.
+
+    Summing the two seasons is the honest default rather than a choice of
+    weighting: rates are per-appearance, so a player with 46 previous
+    appearances and 3 new ones is simply a player with 49 appearances of
+    evidence. Current form takes over as it accumulates, through the same
+    shrinkage that already handles a thin sample, with no new parameter to
+    guess at.
+
+    The limitation is that it has no notion of recency -- a full new season
+    weighs the same as the old one, and a player whose role has changed carries
+    the old rate longer than he should. Fixing that needs a decay fitted to
+    real data, which is what the delta pipeline is accumulating.
+    """
+    by_id = {p["id"]: p for p in previous}
+    merged, carried = [], 0
+    for player in current:
+        before = by_id.get(player["id"])
+        if not before:
+            merged.append(player)
+            continue
+        combined = dict(player)
+        for stat in CARRIED_STATS:
+            combined[stat] = (player.get(stat) or 0) + (before.get(stat) or 0)
+        merged.append(combined)
+        carried += 1
+    return merged, carried
+
+
+def _round_pairs(rnd: dict, squads: dict[int, str]) -> set[tuple[str, str]]:
+    """Every (club, opponent) ordered pair the round actually schedules.
+
+    Both directions, so a projection can be checked from either side.
+    """
+    pairs: set[tuple[str, str]] = set()
+    for game in rnd.get("games") or []:
+        home = squads.get(game.get("homeId"))
+        away = squads.get(game.get("awayId"))
+        if home and away:
+            pairs.add((home, away))
+            pairs.add((away, home))
+    return pairs
+
+
+def _only_this_round(
+    clubs: list[ClubProjection], pairs: set[tuple[str, str]]
+) -> list[ClubProjection]:
+    """Drop projections for fixtures that belong to a later round.
+
+    Club projections are built from every event the odds feed returns, and
+    bookmakers price a week or more ahead. Before a round starts that is
+    harmless, because only that round is listed. Once a round is under way the
+    next one is already priced, and those matches would otherwise be counted as
+    extra fixtures in the current gameweek -- on the first live gameweek 20 of
+    66 clubs gained a phantom double and their projections roughly doubled.
+
+    Matched on the pair rather than the club, so a genuine double keeps both of
+    its fixtures while a next-round match is dropped. An empty `pairs` means
+    the round carries no fixtures to check against, and everything is kept
+    rather than silently discarding the whole gameweek.
+    """
+    if not pairs:
+        return clubs
+    return [c for c in clubs if (c.club, c.opponent) in pairs]
 
 
 def _combine(name: str, group: list[ClubProjection], scheduled: int) -> ClubProjection:
@@ -247,6 +363,15 @@ def load_gameweek(
     raw_players = load_snapshot(snapshots[-1], "players")
     squads = {s["id"]: s["name"] for s in load_snapshot(snapshots[-1], "squads")}
 
+    # Carry the previous season's record across a rollover. Without this every
+    # player reads as having no history the moment a new season starts, and
+    # the whole pool collapses onto position priors.
+    carried_players = 0
+    baseline = _find_season_baseline(snapshots, raw_players)
+    if baseline is not None:
+        _, previous_players = baseline
+        raw_players, carried_players = _merge_history(raw_players, previous_players)
+
     mapping_path = root / "data" / "club_mapping.json"
     if not mapping_path.exists():
         raise RuntimeError(
@@ -286,6 +411,13 @@ def load_gameweek(
                 if game[side] in games_played:
                     games_played[game[side]] += 1
 
+    # The appearance yardstick has to cover the same span as the appearances.
+    # Having merged a full previous campaign into every total, a club that has
+    # played once this season has 47 games behind it, not 1 -- otherwise a
+    # regular reads as having featured 46 times in 1 game.
+    if carried_players:
+        games_played = {sid: n + SEASON_GAMES for sid, n in games_played.items()}
+
     if stored_odds:
         stored = list_odds()
         if not stored:
@@ -324,6 +456,9 @@ def load_gameweek(
                 name = squads.get(game[side])
                 if name:
                     scheduled[name] = scheduled.get(name, 0) + 1
+
+    if upcoming:
+        clubs = _only_this_round(clubs, _round_pairs(upcoming, squads))
 
     # Per-fixture projections, grouped by club. Mapping straight into a dict
     # keyed on club name would keep only the last fixture and silently drop

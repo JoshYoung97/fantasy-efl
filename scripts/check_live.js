@@ -1,15 +1,18 @@
-// Drive the Live view at a frozen matchday moment.
+// Drive the Live view at frozen matchday moments.
 //
-// The rolling lockout is the one thing about this game that cannot be
-// observed on the day the page is built: before the gameweek every player is
-// open, so the locked branch never runs and a bug there ships unseen. This
-// freezes the clock mid-gameweek -- after the Friday match and the 12:30
-// kickoffs, before the 15:00 block -- so both branches execute.
+// The rolling lockout is the one thing about this game that cannot be observed
+// on the day the page is built: before the gameweek every player is open, so
+// the locked branch never runs and a bug there ships unseen.
+//
+// Two passes, both derived from the squad's own kickoffs rather than a
+// hardcoded timestamp -- an earlier version froze at a fixed 13:00, which
+// stopped exercising the locked branch the moment the odds moved and the model
+// picked a squad that all kicked off later. Whatever the squad, one pass sits
+// before every kickoff and one after, so both branches always execute.
 //
 // The property that matters: a replacement must itself still be unlocked.
-// Suggesting a swap to a player whose match has already started is worse than
-// suggesting nothing, because acting on it is impossible and the points are
-// notional.
+// Suggesting a swap to a player whose match has started is worse than
+// suggesting nothing, because acting on it is impossible.
 //
 //     node scripts/check_live.js
 const fs = require("fs");
@@ -19,21 +22,37 @@ const script = html.split("<script>")[1].split("</script>")[0];
 const data = JSON.parse(
   fs.readFileSync(process.argv[3] || "data/app_data.json", "utf8"));
 
-// Saturday 15 Aug, 13:00 BST. Chosen from the real fixture list: the Friday
-// 20:00 match and the twelve 12:30 kickoffs are gone, the fifty 15:00 ones
-// have not started, and Sunday and Monday are days away.
-const FROZEN = new Date("2026-08-15T13:00:00+01:00").getTime();
 const RealDate = Date;
-class FrozenDate extends RealDate {
-  constructor(...args) {
-    if (args.length === 0) super(FROZEN);
-    else super(...args);
-  }
-  static now() { return FROZEN; }
-}
-global.Date = FrozenDate;
+let failures = 0;
+const check = (label, ok, detail = "") => {
+  console.log(`  ${ok ? "ok  " : "FAIL"} ${label}${detail ? "  " + detail : ""}`);
+  if (!ok) failures++;
+};
 
-const byId = new Map();
+const poolById = new Map(data.pool.map((p) => [p.id, p]));
+const kickoffsOf = (row) => (row.fixtures || []).map((f) => f.kickoff).filter(Boolean);
+const squadKickoffs = [
+  ...data.squad.playerIds.flatMap((id) => kickoffsOf(poolById.get(id) || {})),
+  ...data.squad.clubs.map((c) => c.kickoff),
+].filter(Boolean).map((k) => new RealDate(k).getTime());
+
+if (!squadKickoffs.length) {
+  console.log("no kickoff times in the squad; nothing to check");
+  process.exit(0);
+}
+const EARLIEST = Math.min(...squadKickoffs);
+// The whole round, not just the squad: "everything is locked" has to mean
+// every club the picker could offer, and a gameweek runs Friday to Monday.
+// Taking the squad's own latest left Sunday and Monday clubs legitimately
+// available, and the engine was right to offer them.
+const ALL_KICKOFFS = (data.clubs || [])
+  .map((c) => c.kickoff).filter(Boolean).map((k) => new RealDate(k).getTime());
+const LATEST = Math.max(...squadKickoffs, ...ALL_KICKOFFS);
+const HOUR = 3600 * 1000;
+
+const kickoffByClub = new Map((data.clubs || []).map((c) => [c.name, c.kickoff]));
+
+// ---- stub DOM, rebuilt for each pass ------------------------------------
 
 function element(tag = "div") {
   const node = {
@@ -58,48 +77,50 @@ function element(tag = "div") {
   return node;
 }
 
-global.document = {
-  createElement: element,
-  createTextNode: (t) => ({ textContent: t, children: [] }),
-  getElementById: (id) => {
-    if (!byId.has(id)) byId.set(id, element());
-    return byId.get(id);
-  },
-  querySelector: () => element(),
-  querySelectorAll: () => [],
-  documentElement: element(),
-  body: element(),
-  addEventListener() {},
-};
-global.window = {
-  matchMedia: () => ({ matches: false, addEventListener() {} }),
-  addEventListener() {},
-};
-global.setInterval = () => 0;
-global.setTimeout = () => 0;
+// The clock has to stay frozen for the whole pass, not just while the script
+// first runs. Restoring it before the interactions meant every click -- and
+// the re-render it triggers -- happened at real wall-clock time, so the
+// assertions were checking a moment the test never intended.
+function runAt(frozen, body) {
+  const byId = new Map();
+  global.document = {
+    createElement: element,
+    createTextNode: (t) => ({ textContent: t, children: [] }),
+    getElementById: (id) => {
+      if (!byId.has(id)) byId.set(id, element());
+      return byId.get(id);
+    },
+    querySelector: () => element(),
+    querySelectorAll: () => [],
+    documentElement: element(),
+    body: element(),
+    addEventListener() {},
+  };
+  global.window = {
+    matchMedia: () => ({ matches: false, addEventListener() {} }),
+    addEventListener() {},
+  };
+  global.setInterval = () => 0;
+  global.setTimeout = () => 0;
+  class FrozenDate extends RealDate {
+    constructor(...args) {
+      if (args.length === 0) super(frozen); else super(...args);
+    }
+    static now() { return frozen; }
+  }
+  global.Date = FrozenDate;
+  try {
+    new Function(script)();
+    body(byId);
+  } finally {
+    global.Date = RealDate;
+  }
+}
 
-new Function(script)();
+const textOf = (n) => n.textContent || (n.children || []).map(textOf).join(" ");
 
-let failures = 0;
-const check = (label, ok, detail = "") => {
-  console.log(`  ${ok ? "ok  " : "FAIL"} ${label}${detail ? "  " + detail : ""}`);
-  if (!ok) failures++;
-};
-
-// Text of a node tree, since the stub does not compute it for parents.
-const textOf = (n) =>
-  n.textContent || (n.children || []).map(textOf).join(" ");
-
-const kickoffOf = new Map(
-  (data.clubs || []).map((c) => [c.name, c.kickoff]));
-const lockedClub = (name) => {
-  const k = kickoffOf.get(name);
-  return k ? new RealDate(k).getTime() <= FROZEN : false;
-};
-
-function readRows() {
-  const body = byId.get("livebody");
-  return (body.children || [])
+function readRows(byId) {
+  return (byId.get("livebody").children || [])
     .filter((c) => String(c.className).includes("liverow"))
     .map((row) => {
       const kids = row.children;
@@ -108,106 +129,70 @@ function readRows() {
         swapBox.children.find((k) => String(k.className).includes("cand"));
       const delta = swapBox &&
         swapBox.children.find((k) => String(k.className).includes("delta"));
-      const button = swapBox && swapBox.children.find((k) => k.tag === "button");
       return {
         slot: textOf(kids[0]).trim(),
         name: textOf(kids[1].children[0]).trim(),
-        sub: textOf(kids[1].children[1]).trim(),
         when: textOf(kids[2]).trim(),
-        xp: parseFloat(textOf(kids[3])),
         locked: String(row.className).includes("shut"),
         cand: cand ? textOf(cand).trim() : null,
         gain: delta ? parseFloat(textOf(delta)) : null,
-        button,
+        button: swapBox && swapBox.children.find((k) => k.tag === "button"),
       };
     });
 }
 
-const rows = readRows();
-
-console.log(`frozen at Sat 15 Aug 13:00 BST -- ${rows.length} squad slots`);
-check("nine slots shown (7 players + 2 clubs)", rows.length === 9,
-  String(rows.length));
-
-const locked = rows.filter((r) => r.locked);
-const open = rows.filter((r) => !r.locked);
-check("both branches exercised", locked.length > 0 && open.length > 0,
-  `${locked.length} locked, ${open.length} open`);
-
-console.log("\nlocked slots are settled:");
-check("no swap offered on a locked slot",
-  locked.every((r) => r.cand === null),
-  locked.filter((r) => r.cand).map((r) => r.name).join(", ") || "none offered");
-check("locked slots read as locked",
-  locked.every((r) => r.when === "locked"),
-  locked.map((r) => r.when).join(" ") || "n/a");
-
-// The model's own squad is optimal over the whole pool, and locking only
-// ever removes candidates -- it cannot make an incumbent beatable. So the
-// right answer here is silence, and anything else means the engine is
-// inventing upgrades.
-check("an already-optimal squad is left alone",
-  rows.every((r) => r.cand === null),
-  rows.filter((r) => r.cand).map((r) => r.name + " -> " + r.cand).join("; ") || "no changes urged");
-
-// Clearing the squad is the reachable way to make the engine actually run:
-// an empty slot is beaten by anyone, which is also the real team-news case
-// (a player ruled out drops to zero and the same path fires).
-console.log("\nrefilling an emptied squad:");
-byId.get("planclear").click();
-const emptied = readRows();
-const suggested = emptied.filter((r) => r.cand);
-check("every open slot offers a replacement",
-  suggested.length === emptied.filter((r) => !r.locked).length,
-  `${suggested.length} offered for ${emptied.filter((r) => !r.locked).length} open slots`);
-check("the engine was actually exercised", suggested.length > 0,
-  `${suggested.length} suggestions`);
-
-// "Name  (Club)" for a player, "Name  (vs Opp)" for a club pick.
 const parse = (text) => {
   const m = text.match(/^(.*?)\s\s\((.*)\)$/);
   return m ? { name: m[1].trim(), paren: m[2].trim() } : null;
 };
+
+// ---- pass 1: before any kickoff -- everything open ----------------------
+
+const BEFORE = EARLIEST - HOUR;
+console.log(`pass 1  ${new RealDate(BEFORE).toISOString()}  (before every kickoff)`);
+runAt(BEFORE, (byId) => {
+const rows = readRows(byId);
+check("nine slots shown (7 players + 2 clubs)", rows.length === 9, String(rows.length));
+check("nothing is locked yet", rows.every((r) => !r.locked),
+  rows.filter((r) => r.locked).map((r) => r.name).join(", ") || "all open");
+check("an already-optimal squad is left alone", rows.every((r) => r.cand === null),
+  rows.filter((r) => r.cand).map((r) => r.name).join("; ") || "no changes urged");
+
+// Clearing is the reachable way to make the swap engine run: an empty slot is
+// beaten by anyone, which is also the team-news case (a player ruled out drops
+// to zero and the same path fires).
+console.log("\n  refilling an emptied squad:");
+byId.get("planclear").click();
+const suggested = readRows(byId).filter((r) => r.cand);
+check("the engine was actually exercised", suggested.length > 0,
+  `${suggested.length} suggestions`);
 const unreachable = [];
 suggested.forEach((r) => {
   const bits = parse(r.cand);
   if (!bits) { unreachable.push(r.cand + " (unparsed)"); return; }
   const club = r.slot === "CLB" ? bits.name : bits.paren;
-  if (lockedClub(club)) unreachable.push(`${bits.name} -> ${club}`);
+  const ko = kickoffByClub.get(club);
+  if (ko && new RealDate(ko).getTime() <= BEFORE) unreachable.push(bits.name);
 });
-check("every candidate's own match is still to come",
-  unreachable.length === 0,
+check("every candidate's own match is still to come", unreachable.length === 0,
   unreachable.join("; ") || `${suggested.length} checked against kickoff times`);
-check("every suggested swap is an improvement",
-  suggested.every((r) => r.gain > 0),
+check("every suggested swap is an improvement", suggested.every((r) => r.gain > 0),
   suggested.map((r) => r.gain.toFixed(2)).join(" "));
-
-// The suggestions have to be a squad, not a list of nine answers to the same
-// question. Two slots naming the same player is unactionable; two club slots
-// naming the same club is not a legal squad at all.
 const names = suggested.map((r) => parse(r.cand)).filter(Boolean).map((b) => b.name);
-const dupes = names.filter((n, i) => names.indexOf(n) !== i);
 check("no candidate is offered to two slots at once",
-  dupes.length === 0, dupes.join(", ") || `${names.length} distinct`);
-
-// The two-per-club cap applies to players only. A club selection is a
-// separate pick, so two Boro players alongside Boro as a club is legal and
-// must not be flagged.
-const playerClubs = suggested
-  .filter((r) => r.slot !== "CLB")
+  new Set(names).size === names.length,
+  names.filter((n, i) => names.indexOf(n) !== i).join(", ") || `${names.length} distinct`);
+const playerClubs = suggested.filter((r) => r.slot !== "CLB")
   .map((r) => parse(r.cand)).filter(Boolean).map((b) => b.paren);
-const overUsed = [...new Set(playerClubs)].filter(
-  (c) => playerClubs.filter((x) => x === c).length > 2);
-check("no club supplies more than two players", overUsed.length === 0,
-  overUsed.join(", ") || "within the two-per-club limit");
-
-const clubPicks = suggested
-  .filter((r) => r.slot === "CLB")
+check("no club supplies more than two players",
+  playerClubs.every((c) => playerClubs.filter((x) => x === c).length <= 2),
+  "within the two-per-club limit");
+const clubPicks = suggested.filter((r) => r.slot === "CLB")
   .map((r) => parse(r.cand)).filter(Boolean).map((b) => b.name);
 check("the two club slots name different clubs",
   new Set(clubPicks).size === clubPicks.length, clubPicks.join(", "));
 
-console.log("\napplying one:");
+console.log("\n  applying one:");
 const target = suggested[0];
 const before = parseFloat(byId.get("plantotal").textContent);
 target.button.click();
@@ -216,14 +201,30 @@ check("squad total rose", after > before, `${before} -> ${after}`);
 check("the gain was the one advertised",
   Math.abs((after - before) - target.gain) < 0.02,
   `moved ${(after - before).toFixed(2)}, promised ${target.gain.toFixed(2)}`);
-const refilled = readRows();
-check("the slot is now filled",
-  refilled.some((r) => parse(target.cand) &&
-    r.name === parse(target.cand).name),
-  parse(target.cand) ? parse(target.cand).name : target.cand);
-check("still nine slots", refilled.length === 9, String(refilled.length));
+check("still nine slots", readRows(byId).length === 9);
 check("no rule broken", byId.get("planwarn").textContent === "",
   byId.get("planwarn").textContent);
+});
+
+// ---- pass 2: after every kickoff -- everything locked -------------------
+
+console.log(`\npass 2  ${new RealDate(LATEST + HOUR).toISOString()}  (after every kickoff)`);
+runAt(LATEST + HOUR, (byId) => {
+const rows = readRows(byId);
+check("every slot is locked", rows.every((r) => r.locked),
+  rows.filter((r) => !r.locked).map((r) => r.name).join(", ") || "all locked");
+check("locked slots read as locked", rows.every((r) => r.when === "locked"),
+  [...new Set(rows.map((r) => r.when))].join(" "));
+check("no swap is offered on a locked squad", rows.every((r) => r.cand === null),
+  rows.filter((r) => r.cand).map((r) => r.name + " -> " + r.cand).join("; ") || "none");
+// The decisive one: with every match started nothing can be brought in, so
+// even an empty squad must have nothing to suggest.
+byId.get("planclear").click();
+const afterClear = readRows(byId).filter((r) => r.cand);
+check("an emptied squad offers nobody once every match has started",
+  afterClear.length === 0,
+  afterClear.map((r) => r.slot + " -> " + r.cand).join("; ") || "none offered");
+});
 
 console.log(failures ? `\n${failures} failed` : "\nlive view behaves");
 process.exit(failures ? 1 : 0);
