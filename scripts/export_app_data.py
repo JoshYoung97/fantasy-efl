@@ -23,7 +23,11 @@ from fantasy_efl.expected import (  # noqa: E402
 from fantasy_efl.optimiser import optimise_gameweek  # noqa: E402
 from fantasy_efl.pipeline import load_gameweek  # noqa: E402
 from fantasy_efl.player_model import player_rates  # noqa: E402
-from fantasy_efl.snapshot import list_snapshots, load_snapshot  # noqa: E402
+from fantasy_efl.snapshot import (  # noqa: E402
+    list_snapshots,
+    load_snapshot,
+    round_complete,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 OUTPUT = ROOT / "data" / "app_data.json"
@@ -202,8 +206,13 @@ def main() -> int:
     # fixtures, so they interleave with the real schedule unless filtered out.
     season_rounds = [r for r in rounds if r.get("gameMode") == "season"]
 
+    # Played-ness from the data, never from the status string. The feed says
+    # "completed", not "complete", so this comparison never matched and the
+    # page stayed on GW1 permanently -- publishing GW1's name, deadline and
+    # kickoff times against the pipeline's GW2 fixtures. Every player then
+    # read as locked, because GW1's kickoffs are in the past.
     upcoming = min(
-        (r for r in season_rounds if r["status"] != "complete"),
+        (r for r in season_rounds if not round_complete(r)),
         key=lambda r: r["roundNumber"],
     )
 

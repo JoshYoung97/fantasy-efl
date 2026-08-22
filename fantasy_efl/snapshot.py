@@ -90,9 +90,35 @@ def take_snapshot(data_dir: Path | None = None) -> Path:
     return target
 
 
+def is_played(game: dict) -> bool:
+    """Whether a fixture has actually happened.
+
+    Read from the data, not from a status string. A recorded score is the
+    strongest signal; `isFinalized` is accepted as a fallback in case scores
+    arrive later than the flag.
+    """
+    return game.get("homeScore") is not None or bool(game.get("isFinalized"))
+
+
+def round_complete(rnd: dict) -> bool:
+    """Whether every fixture in a round has been played.
+
+    Deliberately not `status == "complete"`. The feed's own value is
+    "completed", and keying off the wrong spelling silently pins the game to
+    GW1 forever -- which is exactly what happened: the page kept publishing
+    GW1's name, deadline and kickoff times against GW2's fixtures, so every
+    player read as already locked.
+    """
+    games = rnd.get("games") or []
+    return bool(games) and all(is_played(g) for g in games)
+
+
 def _current_round(rounds: list[dict]) -> int | None:
     """The lowest-numbered round that has not been completed."""
-    pending = [r for r in rounds if r.get("status") != "complete"]
+    pending = [
+        r for r in rounds
+        if r.get("gameMode") == "season" and not round_complete(r)
+    ]
     return min((r["roundNumber"] for r in pending), default=None)
 
 

@@ -23,7 +23,15 @@ from .player_model import (
     project_player,
 )
 from .projections import ClubProjection, project_all
-from .snapshot import list_odds, list_snapshots, load_odds, load_snapshot, save_odds
+from .snapshot import (
+    is_played,
+    list_odds,
+    list_snapshots,
+    load_odds,
+    load_snapshot,
+    round_complete,
+    save_odds,
+)
 
 
 #: Minutes sampled when building a per-player projection curve.
@@ -91,10 +99,7 @@ class Gameweek:
         ]
 
 
-def _round_complete(rnd: dict) -> bool:
-    """Whether every fixture in a round has been played."""
-    games = rnd.get("games") or []
-    return bool(games) and all(_is_played(g) for g in games)
+_round_complete = round_complete
 
 
 #: Counting stats that accumulate through a season and reset with it. Every
@@ -231,14 +236,10 @@ def _combine(name: str, group: list[ClubProjection], scheduled: int) -> ClubProj
     )
 
 
-def _is_played(game: dict) -> bool:
-    """Whether a fixture has actually happened.
-
-    Read from the data, not from a status string. A recorded score is the
-    strongest signal; `isFinalized` is accepted as a fallback in case scores
-    arrive later than the flag.
-    """
-    return game.get("homeScore") is not None or bool(game.get("isFinalized"))
+#: Played-ness lives in snapshot.py so every caller shares one definition.
+#: Two other places had grown their own copy keyed off a status string that
+#: the feed does not use.
+_is_played = is_played
 
 
 def override_fixture(
