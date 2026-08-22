@@ -396,6 +396,48 @@ def build_goal_seeds(
     return _build_reconciled_seeds(matches, "goal_odds", targets)
 
 
+def build_goal_seeds_unreconciled(
+    matches: list[PlayerMatch], require_confirmed: bool = True,
+) -> dict[int, float]:
+    """Matched, unambiguous entries -> per-player goals90 seeds, no team reconciliation.
+
+    Alternative to `build_goal_seeds` for whenever reconciling against a
+    club's team-level expected goals would be unsafe: reconciliation
+    attributes a club's whole expected-goals total across however many
+    players are priced for it -- correct when that set is a real starting
+    lineup, but not when it is instead "every player anyone bothered to
+    price", which dilutes genuine first-choice scorers' share across fringe
+    players who likely will not even feature. A raw per-player read (same
+    shape as `build_shots_on_target_seeds`) is the safer of the two wrong
+    answers in that situation.
+
+    `require_confirmed=True` (the default) matches `build_goal_seeds`'s own
+    gating: only confirmed lineups seed the model, for the reason given in
+    this module's docstring (a predicted-lineup price blends this player's
+    rate with the market's own doubt about whether he starts at all, which
+    `MinutesModel` already owns half of). Pass `require_confirmed=False` --
+    the "use AGS inputs for all" mode -- to seed every matched, unambiguous,
+    priced entry regardless of confirmation status; this is the one case
+    where skipping the confirmed gate is deliberate, because it is paired
+    with also skipping reconciliation, so an unconfirmed fringe player no
+    longer dilutes anyone else's share the way it would under
+    `build_goal_seeds`.
+
+    Same price, same Poisson inversion and minutes-rebase as the reconciled
+    path -- just without the rescale-to-team-total step, so it also carries
+    the book's overround uncorrected, same as shots on target.
+    """
+    seeds: dict[int, float] = {}
+    for m in matches:
+        if not ((m.entry.confirmed or not require_confirmed) and m.player_id is not None and not m.ambiguous):
+            continue
+        if m.entry.goal_odds is None:
+            continue
+        raw = implied_rate(m.entry.goal_odds)
+        seeds[m.player_id] = seed_rate(raw, m.entry.lineup_status)
+    return seeds
+
+
 def build_assist_seeds(
     matches: list[PlayerMatch], team_expected_goals: dict[str, float],
 ) -> SeedResult:

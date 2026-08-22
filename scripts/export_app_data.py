@@ -1,12 +1,20 @@
 """Export current projections to data/app_data.json for the web page.
 
-    python scripts/export_app_data.py [--stored-odds]
+    python scripts/export_app_data.py [--stored-odds] [--ags-all]
 
 Costs 3 Odds API credits, unless --stored-odds replays the most recently
 saved odds payload instead -- no key needed, and it's how a group works from
 the same numbers rather than everyone fetching an hour apart and getting
 different projections from identical code. Run before each gameweek
 deadline, then `build_app.py` to regenerate the page.
+
+--ags-all seeds every matched, priced anytime-goalscorer entry regardless of
+`confirmed` status, using each player's own raw price with no team-level
+reconciliation (see build_goal_seeds_unreconciled in goalscorer_odds.py).
+Default (off) is the safer per-player-confirmed, team-reconciled path
+(build_goal_seeds) -- wait for real lineups, same as every other gameweek.
+Turn it on to sanity-check a wider pool of players against their bookmaker
+price ahead of lineups being announced.
 """
 
 from __future__ import annotations
@@ -27,6 +35,7 @@ from fantasy_efl.goalscorer_odds import (  # noqa: E402
     apply_seed,
     build_assist_seeds,
     build_goal_seeds,
+    build_goal_seeds_unreconciled,
     build_shots_on_target_seeds,
     load_entries,
     match_players,
@@ -216,6 +225,7 @@ def _pool(gw, kickoffs, divisions: dict[int, str], elite=None, scorer_seeds=None
 
 def main() -> int:
     stored_odds = "--stored-odds" in sys.argv
+    ags_all = "--ags-all" in sys.argv
     try:
         gw = load_gameweek(ROOT, stored_odds=stored_odds)
     except RuntimeError as exc:
@@ -292,23 +302,37 @@ def main() -> int:
         matches = match_players(entries, roster)
         team_expected_goals = {c.club: c.profile.scored_rate for c in gw.clubs}
 
-        goal_result = build_goal_seeds(matches, team_expected_goals)
+        # Goals: --ags-all seeds every matched, priced entry regardless of
+        # confirmed status, unreconciled against the team total (see
+        # build_goal_seeds_unreconciled's docstring for why those two go
+        # together). Default is the normal confirmed+reconciled path --
+        # wait for real lineups, same as any other gameweek.
+        sparse_goal_clubs: dict[str, int] = {}
+        if ags_all:
+            goal_seeds = build_goal_seeds_unreconciled(matches, require_confirmed=False)
+        else:
+            goal_result = build_goal_seeds(matches, team_expected_goals)
+            goal_seeds = goal_result.seeds
+            sparse_goal_clubs = goal_result.sparse_clubs
         assist_result = build_assist_seeds(matches, team_expected_goals)
         sot_seeds = build_shots_on_target_seeds(matches)
-        scorer_seeds = {"goals": goal_result.seeds, "assists": assist_result.seeds, "sot": sot_seeds}
+        scorer_seeds = {"goals": goal_seeds, "assists": assist_result.seeds, "sot": sot_seeds}
 
         unusable = [m for m in matches if m.player_id is None or m.ambiguous]
         if unusable:
             print(f"  {len(unusable)} of {len(entries)} scorer-odds entries unmatched or "
                   f"ambiguous -- see goalscorer_odds.match_players")
         unconfirmed = [m for m in matches if m.player_id is not None and not m.ambiguous and not m.entry.confirmed]
-        if unconfirmed:
+        if unconfirmed and not ags_all:
             print(f"  {len(unconfirmed)} matched entries not yet confirmed -- predicted lineups "
                   f"aren't used to seed the model (see goalscorer_odds.py)")
-        print(f"  seeded: {len(goal_result.seeds)} goals, {len(assist_result.seeds)} assists, "
+        if ags_all:
+            print(f"  --ags-all: goals seeded from every matched priced entry, "
+                  f"ignoring confirmed status and team reconciliation")
+        print(f"  seeded: {len(goal_seeds)} goals, {len(assist_result.seeds)} assists, "
               f"{len(sot_seeds)} shots on target")
-        for stat, result in (("goals", goal_result), ("assists", assist_result)):
-            for club, count in result.sparse_clubs.items():
+        for stat, sparse in (("goals", sparse_goal_clubs), ("assists", assist_result.sparse_clubs)):
+            for club, count in sparse.items():
                 print(f"  WARNING: only {count} priced player(s) for {club} ({stat}) -- "
                       f"reconciliation attributes the whole team's total across just them, "
                       f"which overstates their share. Price more of the likely contributors.")
