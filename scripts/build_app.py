@@ -18,7 +18,14 @@ ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data" / "app_data.json"
 OUTPUT = ROOT / "data" / "app.html"
 
+#: Casual gate, not real security -- see the CSS comment above #fefl-gate in
+#: TEMPLATE. Ships in the page's own source, same as everything else on a
+#: static page; it only needs to keep the page off search engines and out of
+#: randoms' hands if the URL leaks.
+GATE_PASSWORD = "gubclub"
+
 TEMPLATE = """<title>Fantasy EFL Projections</title>
+<meta name="robots" content="noindex, nofollow, noarchive">
 <style>
   :root {
     /* Taken from the EFL's own division marks rather than chosen: #001489
@@ -1287,7 +1294,42 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
       max-height: calc(100vh - 7rem); overflow-y: auto;
     }
   }
+
+  /* A casual gate, not real security -- the password ships in this file's
+     source, same as everything else on a static page. It exists to keep the
+     page off search engines and out of randoms' hands if the URL leaks, not
+     to withstand anyone who opens dev tools. */
+  html:not(.fefl-gate-ok) .wrap { display: none !important; }
+  #fefl-gate {
+    position: fixed; inset: 0; z-index: 9999;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--ink);
+  }
+  html.fefl-gate-ok #fefl-gate { display: none; }
+  #fefl-gate form {
+    display: flex; flex-direction: column; gap: 0.75rem;
+    padding: 2rem; background: var(--surface); border-radius: 12px; min-width: 260px;
+  }
+  #fefl-gate label { color: var(--text); font-size: 0.95rem; }
+  #fefl-gate input {
+    padding: 0.5rem 0.6rem; border-radius: 6px; font-size: 1rem;
+    background: var(--raised); border: 1px solid var(--line); color: var(--text);
+  }
+  #fefl-gate button {
+    padding: 0.5rem; border-radius: 6px; border: none; background: var(--navy-lift);
+    color: #fff; font-weight: 600; cursor: pointer;
+  }
+  #fefl-gate .err { color: var(--red); font-size: 0.85rem; display: none; }
 </style>
+
+<div id="fefl-gate">
+  <form id="fefl-gate-form">
+    <label for="fefl-gate-pw">FEFL Club &mdash; password</label>
+    <input id="fefl-gate-pw" type="password" autocomplete="off">
+    <button type="submit">Enter</button>
+    <div class="err" id="fefl-gate-err">Wrong password</div>
+  </form>
+</div>
 
 <div class="wrap">
   <header class="topbar">
@@ -1471,6 +1513,43 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
 </div>
 
 <script>
+  // Casual gate (see the CSS comment above #fefl-gate): unlocks the rest of
+  // the page for the session once the right password is entered. Kept as
+  // the first thing this single script tag's contents does, and defensive
+  // about sessionStorage possibly not existing, because check_page.js,
+  // check_live.js and check_planner.js all run this exact block against a
+  // stub document with no real sessionStorage -- and all three assume the
+  // page carries exactly one script tag, extracted by a plain string split,
+  // so a literal "less-than script greater-than" substring anywhere in a
+  // comment (like this one almost had) would silently truncate what they
+  // extract.
+  (function () {
+    var GATE_PASSWORD = __GATE_PASSWORD__;
+    var unlocked = null;
+    try {
+      unlocked = (typeof sessionStorage !== "undefined") ? sessionStorage.getItem("feflGateOk") : null;
+    } catch (e) {}
+    if (unlocked === "1") {
+      document.documentElement.classList.add("fefl-gate-ok");
+    }
+    var form = document.getElementById("fefl-gate-form");
+    if (form && form.addEventListener) {
+      form.addEventListener("submit", function (e) {
+        if (e && e.preventDefault) e.preventDefault();
+        var input = document.getElementById("fefl-gate-pw");
+        if (input && input.value === GATE_PASSWORD) {
+          try {
+            if (typeof sessionStorage !== "undefined") sessionStorage.setItem("feflGateOk", "1");
+          } catch (e) {}
+          document.documentElement.classList.add("fefl-gate-ok");
+        } else {
+          var err = document.getElementById("fefl-gate-err");
+          if (err) err.style.display = "block";
+        }
+      });
+    }
+  })();
+
   const DATA = __DATA__;
   // Rates arrive as a positional array with a shared key list, because
   // naming every field on every fixture cost 38% of the payload in repeated
@@ -4019,6 +4098,7 @@ def main() -> int:
 
     payload = json.loads(DATA.read_text(encoding="utf-8"))
     html = TEMPLATE.replace("__DATA__", json.dumps(payload, ensure_ascii=False))
+    html = html.replace("__GATE_PASSWORD__", json.dumps(GATE_PASSWORD))
     OUTPUT.write_text(html, encoding="utf-8")
 
     failure = _smoke_test(OUTPUT)
