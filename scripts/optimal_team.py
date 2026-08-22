@@ -110,6 +110,11 @@ def main() -> int:
                         help="override expected goals for a fixture, e.g. "
                              "--odds Swindon=1.4/0.6. Rebuilds clean sheet, club "
                              "points and both clubs' players from your numbers.")
+    parser.add_argument("--stored-odds", action="store_true",
+                        help="replay the last saved odds instead of fetching. "
+                             "Needs no API key, costs no credits, and gives "
+                             "everyone working from the same repo identical "
+                             "numbers.")
     args = parser.parse_args()
 
     try:
@@ -117,6 +122,7 @@ def main() -> int:
             ROOT,
             use_fpl_backfill=args.fpl,
             include_unproven=not args.proven_only,
+            stored_odds=args.stored_odds,
         )
     except RuntimeError as exc:
         print(f"error: {exc}", file=sys.stderr)

@@ -83,3 +83,106 @@ def test_a_round_is_complete_only_when_every_game_is_played():
 
 def test_a_goalless_draw_counts_as_played():
     assert _is_played({"homeScore": 0, "awayScore": 0})
+
+
+def test_fixture_lookup_uses_the_same_names_it_was_keyed_with():
+    """Guards a silent, total data loss.
+
+    Club projections are renamed to EFL spellings, so the fixture store is
+    keyed by EFL name. Looking it up by the bookmaker name instead dropped
+    every club whose two names differ -- seven of them, and all 183 of their
+    players -- with no error anywhere. The optimiser simply never saw them.
+    """
+    import inspect
+
+    from fantasy_efl import pipeline
+
+    source = inspect.getsource(pipeline.load_gameweek)
+    assert "fixtures.get(mapping.get(" not in source, (
+        "fixture lookups must use the EFL club name, matching how per_fixture "
+        "is keyed, not the bookmaker name"
+    )
+
+
+def test_scripts_do_not_reassemble_the_pipeline():
+    """One implementation, so the two cannot drift apart silently.
+
+    A second copy of the pipeline in player_projections.py applied different
+    filters, missed double gameweeks, and never received the corrections made
+    to the minutes model -- while still producing plausible-looking numbers.
+    """
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    for script in ("player_projections.py", "optimal_team.py", "export_app_data.py"):
+        source = (root / "scripts" / script).read_text(encoding="utf-8")
+        assert "project_all(" not in source, (
+            f"{script} builds club projections itself instead of using "
+            f"load_gameweek; that is how the two implementations diverged"
+        )
+
+
+def test_stored_odds_replay_identically(tmp_path):
+    """Shared numbers depend on this: a stored payload must parse the same.
+
+    Odds move continuously, so the same code an hour apart gives different
+    projections. Replaying one stored response is how a group works from
+    identical inputs.
+    """
+    from fantasy_efl.oddsapi import parse_fixtures
+    from fantasy_efl.snapshot import list_odds, load_odds, save_odds
+
+    payload = {
+        "Championship": [{
+            "id": "abc", "sport_key": "soccer_efl_champ",
+            "commence_time": "2026-08-15T14:00:00Z",
+            "home_team": "Alpha", "away_team": "Beta",
+            "bookmakers": [{"key": "x", "markets": [{"key": "h2h", "outcomes": [
+                {"name": "Alpha", "price": 2.1}, {"name": "Beta", "price": 3.6},
+                {"name": "Draw", "price": 3.3}]}]}],
+        }]
+    }
+    save_odds(payload, tmp_path)
+    stored = list_odds(tmp_path)
+    assert len(stored) == 1
+
+    replayed = load_odds(stored[0])
+    assert replayed == payload
+
+    direct = parse_fixtures(payload["Championship"])
+    from_store = parse_fixtures(replayed["Championship"])
+    assert [f.id for f in direct] == [f.id for f in from_store]
+    assert direct[0].consensus() == from_store[0].consensus()
+
+
+def test_stored_odds_without_any_saved_payload_errors_clearly(tmp_path):
+    from fantasy_efl.snapshot import list_odds
+    assert list_odds(tmp_path) == []
+
+
+def test_difficulty_tiers_run_from_favourable_to_hopeless():
+    from fantasy_efl.projections import difficulty_tier
+
+    assert difficulty_tier(0.733) == 1   # Middlesbrough at home to Lincoln
+    assert difficulty_tier(0.409) == 2   # West Ham away at Burnley
+    assert difficulty_tier(0.326) == 3   # Burnley at home to West Ham
+    assert difficulty_tier(0.096) == 5   # Lincoln away at Middlesbrough
+
+
+def test_every_probability_lands_in_a_tier():
+    from fantasy_efl.projections import difficulty_tier
+    tiers = {difficulty_tier(p / 100) for p in range(101)}
+    assert tiers == {1, 2, 3, 4, 5}
+
+
+def test_difficulty_never_rises_as_a_fixture_gets_easier():
+    from fantasy_efl.projections import difficulty_tier
+    tiers = [difficulty_tier(p / 100) for p in range(101)]
+    assert tiers == sorted(tiers, reverse=True)
+
+
+def test_a_balanced_round_is_not_forced_into_extreme_tiers():
+    """Quintiles would rank a coin flip 'hard' because others were closer."""
+    from fantasy_efl.projections import difficulty_tier
+    balanced = [difficulty_tier(p) for p in (0.33, 0.34, 0.35, 0.36, 0.37)]
+    assert set(balanced) == {3}

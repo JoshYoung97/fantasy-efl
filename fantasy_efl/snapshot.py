@@ -90,15 +90,78 @@ def take_snapshot(data_dir: Path | None = None) -> Path:
     return target
 
 
+def is_played(game: dict) -> bool:
+    """Whether a fixture has actually happened.
+
+    Read from the data, not from a status string. A recorded score is the
+    strongest signal; `isFinalized` is accepted as a fallback in case scores
+    arrive later than the flag.
+    """
+    return game.get("homeScore") is not None or bool(game.get("isFinalized"))
+
+
+def round_complete(rnd: dict) -> bool:
+    """Whether every fixture in a round has been played.
+
+    Deliberately not `status == "complete"`. The feed's own value is
+    "completed", and keying off the wrong spelling silently pins the game to
+    GW1 forever -- which is exactly what happened: the page kept publishing
+    GW1's name, deadline and kickoff times against GW2's fixtures, so every
+    player read as already locked.
+    """
+    games = rnd.get("games") or []
+    return bool(games) and all(is_played(g) for g in games)
+
+
 def _current_round(rounds: list[dict]) -> int | None:
     """The lowest-numbered round that has not been completed."""
-    pending = [r for r in rounds if r.get("status") != "complete"]
+    pending = [
+        r for r in rounds
+        if r.get("gameMode") == "season" and not round_complete(r)
+    ]
     return min((r["roundNumber"] for r in pending), default=None)
 
 
 def load_snapshot(path: Path, feed: str = "players") -> list | dict:
     """Read one feed back out of a stored snapshot."""
     with gzip.open(Path(path) / f"{feed}.json.gz", "rt", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+#: Stored odds payloads, kept beside the EFL snapshots.
+DEFAULT_ODDS_DIR = Path(__file__).resolve().parent.parent / "data" / "odds"
+
+
+def save_odds(payload: dict, odds_dir: Path | None = None) -> Path:
+    """Store a raw odds response so it can be replayed.
+
+    Odds move continuously, so the same code run an hour apart gives different
+    projections. Storing the payload is what lets several people work from
+    identical numbers, and costs nothing extra -- the fetch has already
+    happened. It also builds an archive of what the market expected before
+    each match, which is the raw material for checking the model against
+    results later.
+    """
+    odds_dir = Path(odds_dir) if odds_dir else DEFAULT_ODDS_DIR
+    odds_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%SZ")
+    target = odds_dir / f"{stamp}.json.gz"
+    with gzip.open(target, "wt", encoding="utf-8") as handle:
+        json.dump(payload, handle, separators=(",", ":"))
+    return target
+
+
+def list_odds(odds_dir: Path | None = None) -> list[Path]:
+    """Stored odds payloads, oldest first."""
+    odds_dir = Path(odds_dir) if odds_dir else DEFAULT_ODDS_DIR
+    if not odds_dir.exists():
+        return []
+    return sorted(p for p in odds_dir.glob("*.json.gz"))
+
+
+def load_odds(path: Path) -> dict:
+    """Read a stored odds payload back."""
+    with gzip.open(Path(path), "rt", encoding="utf-8") as handle:
         return json.load(handle)
 
 

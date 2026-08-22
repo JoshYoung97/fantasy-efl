@@ -30,7 +30,11 @@ The rules differ in ways that change the whole approach:
   Where the market has priced only one of them — odds run three days ahead —
   the shortfall is reported rather than passed off as a whole gameweek.
 - **Two clubs per gameweek, each usable 5 times per season.** A season-long
-  allocation problem with no FPL equivalent. Currently unsolved.
+  allocation problem with no FPL equivalent, solved exactly by min-cost
+  flow in `allocation.py` — greedy fails because using a club now costs one
+  of only five chances and their best fixture may be months away. Doubles
+  are not the constraint: 744 are available across the season for 84
+  selections, so which clubs to spend uses on is the whole question.
 
 ---
 
@@ -56,7 +60,25 @@ shell history. On Mac or Linux, export `ODDS_API_KEY` however you normally
 would.
 
 **Budget:** each run costs 3 Odds API credits against a 500/month free tier.
-Refreshing daily uses about 90.
+Refreshing daily uses about 90. Keys are per person — sharing one means
+everyone draws from the same 500 and it runs dry mid-season.
+
+### Working from the same numbers
+
+Odds move continuously, so the same code run an hour apart gives different
+projections. Every live fetch is stored under `data/odds/` and committed, and
+any script will replay the most recent one instead of fetching:
+
+```bash
+python scripts/optimal_team.py --stored-odds
+```
+
+That needs no API key at all and costs no credits, so a collaborator can pull
+the repo and reproduce your numbers exactly before they have a key of their
+own. It also builds an archive of what the market expected before each match,
+which is what a proper check of the model against results will need.
+
+One person should fetch live; everyone else replays. About 5 MB a season.
 
 ---
 
@@ -67,11 +89,8 @@ Refreshing daily uses about 90.
 | `python -m fantasy_efl.snapshot` | Capture the EFL feeds |
 | `python scripts/optimal_team.py` | Best legal squad |
 | `python scripts/player_projections.py` | Ranked players by position |
-| `python scripts/export_app_data.py` | Data for the web page |
+| `python scripts/export_app_data.py [--stored-odds] [--ags-all]` | Data for the web page (`--stored-odds`: no key needed, replays the last saved odds; `--ags-all`: seed goals from every priced player, ignoring confirmed status and team reconciliation) |
 | `python scripts/build_app.py` | Build `data/app.html` |
-| `python scripts/publish_page.py` | Push `data/app.html` to `gh-pages` |
-| `python -m pytest tests/ -q` | 185 tests |
-
 `optimal_team.py` takes:
 
 - `--exclude Wing Clarke` — drop players after team news
@@ -133,15 +152,32 @@ Resolves itself a few gameweeks into the season.
 
 **The minutes model is calibrated, not measured.** The feed reports
 appearances, not minutes, and counts a five-minute cameo the same as a full
-match — worth about 0.5 points per appearance. Recoverable from snapshot
-deltas once real gameweeks have been played.
+match — worth about 0.5 points per appearance.
 
 **Cards are assumed**, not fed. Position-level allowances in `CARD_COST`.
 
-**No multi-gameweek horizon.** Odds run three days ahead. The obvious
-substitute — last season's club points — does not predict current market
-expectations (r = +0.12 overall, −0.16 in League One), so forward projections
-are deliberately absent rather than fabricated.
+Both are now measurable. `scripts/build_match_history.py` differences the
+snapshots into per-match lines and recovers minutes and cards from the points
+residual — everything else in a score is observable, so the leftover is
+appearance points less card deductions. It reports rather than applies: a
+measured value only beats an assumption if the reconstruction behind it is
+sound, and that needs looking at first. Run it after each gameweek.
+
+On a simulated gameweek over the real pool it recovered a 0.723 start share as
+0.749, and a defender card rate of 0.130 as 0.145.
+
+**No multi-gameweek horizon, and no club strength rating.** Odds run three
+days ahead. Worse, a single round cannot identify club strength at all: every
+club appears exactly once, so only differences within a fixture are visible,
+never levels across a division. The obvious substitute — last season's club
+points — does not predict current market expectations (r = +0.12 overall,
+−0.16 in League One).
+
+`plan_clubs.py --strength` therefore weights clubs by their projected points
+in the *current* round, which measures the fixture as much as the club. It is
+a placeholder. Once several gameweeks have accumulated and clubs have met
+different opponents, a proper rating becomes identifiable and the same solver
+produces the real plan with no change to it.
 
 ---
 

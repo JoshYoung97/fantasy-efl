@@ -18,6 +18,33 @@ from .goals import GoalProfile, profiles_from_probabilities
 from .oddsapi import Fixture
 
 
+#: Fixture difficulty bands, as the club's own win probability.
+#:
+#: Absolute thresholds rather than quintiles. Most EFL fixtures are close --
+#: across a whole round the 20th to 80th percentile spans 31% to 41% -- so
+#: splitting into equal fifths would invent distinctions the market is not
+#: making, and would rank a coin-flip fixture "hard" purely because four
+#: others were marginally closer. Fixed bands leave a balanced round sitting
+#: honestly in the middle tiers, and let a genuine mismatch stand out.
+#:
+#: The win-league market would be the natural source for a season-long team
+#: rating, but no soccer outright market is available through the odds API
+#: (verified: `has_outrights` is false for all three divisions, and requesting
+#: it returns INVALID_MARKET_COMBO). The match-odds price is arguably the
+#: better input anyway -- it already carries home advantage, form and whatever
+#: team news the market has absorbed, none of which a title price reflects.
+DIFFICULTY_BANDS = ((0.50, 1), (0.40, 2), (0.30, 3), (0.20, 4))
+HARDEST_TIER = 5
+
+
+def difficulty_tier(p_win: float) -> int:
+    """1 for the most favourable fixture, 5 for the least."""
+    for threshold, tier in DIFFICULTY_BANDS:
+        if p_win >= threshold:
+            return tier
+    return HARDEST_TIER
+
+
 @dataclass(frozen=True)
 class ClubProjection:
     """One club's projected points for a gameweek.
@@ -47,6 +74,11 @@ class ClubProjection:
     @property
     def p_clean_sheet(self) -> float:
         return self.profile.p_clean_sheet
+
+    @property
+    def difficulty(self) -> int:
+        """Fixture difficulty, 1 (most favourable) to 5 (least)."""
+        return difficulty_tier(self.p_win)
 
     @property
     def is_double(self) -> bool:
