@@ -1,0 +1,10 @@
+{
+  "taken_at": "2026-08-23T17:02:22.809289+00:00",
+  "feeds": {
+    "players": 3478,
+    "squads": 72,
+    "rounds": 42,
+    "competitions": 3
+  },
+  "current_round": 3
+}
