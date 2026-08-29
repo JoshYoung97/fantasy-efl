@@ -464,6 +464,18 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
   .elite-up { color: var(--pitch); font-weight: 700; }
   .elite-down { color: var(--clay); font-weight: 700; }
 
+  /* A gameweek the market has only half priced. Loud on purpose: every
+     number on the page is a subtotal in that case, and reading it as a whole
+     gameweek is the mistake this exists to prevent. */
+  .partialwarn {
+    background: var(--surface); border: 1px solid var(--line);
+    border-left: 3px solid var(--floodlight); border-radius: 4px;
+    padding: 0.7rem 0.9rem; margin: 0 0 1rem;
+    font-size: 0.85rem; color: var(--text);
+  }
+  .partialwarn b { color: var(--floodlight); }
+  .partialwarn .sub { color: var(--mist); font-size: 0.8rem; margin-top: 0.2rem; }
+
   /* ---- Live (rolling lockout) ---- */
   .livesum {
     display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 14px;
@@ -1348,6 +1360,8 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
       <span class="countdown" id="countdown" aria-live="polite"></span>
     </div>
   </header>
+
+  <div id="partialwarn" class="partialwarn" hidden></div>
 
   <!-- ===== Team Planner (landing) ===== -->
   <div id="view-planner" class="view">
@@ -4013,6 +4027,39 @@ TEMPLATE = """<title>Fantasy EFL Projections</title>
   // Land on a filled pitch (the model's squad) with the players picker ready.
   syncPickerTabs();
   seedPlan();
+
+  // A gameweek the odds only half cover.
+  //
+  // Odds run about three days ahead; a gameweek runs Thursday to the
+  // following Wednesday. In a double, the second leg is routinely still
+  // unpriced when the first one kicks off -- 68 of 68 clubs in GW3. The
+  // model records that (scheduled_count against fixture_count) and always
+  // has; the page showed the subtotal as a bare number, which reads exactly
+  // like a whole gameweek and is the one way to misread every figure here at
+  // once.
+  (function partialGameweek() {
+    const box = document.getElementById("partialwarn");
+    if (!box) return;
+    const clubs = DATA.clubs || [];
+    const short = clubs.filter((c) => (c.sched || 1) > (c.fx || 1));
+    if (!short.length) { box.hidden = true; return; }
+    const priced = short.reduce((n, c) => n + (c.fx || 1), 0);
+    const due = short.reduce((n, c) => n + (c.sched || 1), 0);
+    const headline = short.length === clubs.length
+      ? "Double gameweek — only " + priced + " of " + due +
+        " fixtures are priced yet."
+      : short.length + " of " + clubs.length + " clubs have a fixture the " +
+        "market has not priced yet.";
+    const line = el("div");
+    line.append(el("b", null, headline));
+    box.append(line);
+    box.append(el("div", "sub",
+      "Every projection below covers priced fixtures only, so treat the "
+      + "numbers as a subtotal rather than a full gameweek. Re-run once the "
+      + "remaining fixtures are priced — they lock at their own kickoff, "
+      + "not at the deadline."));
+    box.hidden = false;
+  })();
 
   // View switching. Team Planner is the landing tab.
   const VIEWS = ["planner", "live", "players", "clubs", "history"];
