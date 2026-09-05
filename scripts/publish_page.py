@@ -35,6 +35,29 @@ def run(*args, cwd=None, check=True):
     )
 
 
+def _cleanup(worktree: Path) -> None:
+    """Drop the temporary worktree, tolerating a locked filesystem.
+
+    The push has already happened by the time this runs, so a failure here
+    means the page IS live and only the scratch checkout survived. Raising
+    would report the opposite: every run from 29 Aug logged "FAILED at
+    publish - built page not live" while having published perfectly, because
+    OneDrive holds a lock on the repo and `git worktree remove` exits 255.
+
+    Prunes the leftover administrative entry too, or `.git/worktrees` fills
+    with husks and each run picks a new name (gh-pages1, gh-pages2, ...).
+    """
+    if run("worktree", "remove", "--force", str(worktree), check=False).returncode == 0:
+        return
+    run("worktree", "prune", check=False)
+    print(
+        f"note: could not remove the temporary worktree at {worktree} "
+        "(a file lock, usually OneDrive). The page published successfully; "
+        "this is cleanup only.",
+        file=sys.stderr,
+    )
+
+
 def main() -> int:
     if not PAGE.exists():
         print(
@@ -46,7 +69,10 @@ def main() -> int:
     content = PAGE.read_bytes()
     run("fetch", REMOTE)
 
-    with tempfile.TemporaryDirectory() as tmp:
+    # ignore_cleanup_errors: if the worktree could not be removed above, the
+    # directory is still locked here and tearing it down would raise for the
+    # same reason -- after the page is already published.
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         worktree = Path(tmp) / BRANCH
 
         exists_remotely = run(
@@ -72,7 +98,7 @@ def main() -> int:
         status = run("status", "--porcelain", cwd=worktree)
         if not status.stdout.strip():
             print("page unchanged -- nothing to publish")
-            run("worktree", "remove", "--force", str(worktree))
+            _cleanup(worktree)
             return 0
 
         run(
@@ -82,7 +108,7 @@ def main() -> int:
             cwd=worktree,
         )
         run("push", REMOTE, f"HEAD:{BRANCH}", cwd=worktree)
-        run("worktree", "remove", "--force", str(worktree))
+        _cleanup(worktree)
 
     print(f"published {PAGE} to {BRANCH}")
     return 0
